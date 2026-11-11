@@ -32,6 +32,8 @@ Keyboard backlight HUD. DDC/CI brightness for non-Apple external monitors. Now P
 
 These are believed true from documentation and from how comparable apps work, but they decide the architecture, so Phase 0 proves each one with a throwaway spike and writes the result to `docs/FINDINGS.md`.
 
+**Phase 0 result (2026-11-11, macOS 15.7.8, MacBook Air M2):** V1, V2, V5, V6 and V7 confirmed. V3: `DisplayServicesBrightnessChanged` does not exist and is not needed. V4: the sound file is under `LoginPlugins`, and the preference key was not found. V8: stock plays the sound on every step, repeats included. V9: both volume keys unmute and step. The sections below already reflect this; details and exact values are in `docs/FINDINGS.md`.
+
 | Id | Claim to verify | If false |
 |---|---|---|
 | V1 | Volume, mute and brightness keys arrive as `NX_SYSDEFINED` (CGEvent type 14) events with subtype 8 on this keyboard | Log what actually arrives (some keyboards send plain key-down codes 144/145 for brightness) and handle that form too. |
@@ -71,7 +73,8 @@ ModernMac/
 ├─ CLAUDE.md
 ├─ Makefile
 ├─ project.yml                  # XcodeGen
-├─ Config/Local.xcconfig        # git-ignored: DEVELOPMENT_TEAM, signing identity
+├─ Config/Base.xcconfig         # ad-hoc signing defaults; includes Local.xcconfig when present
+├─ Config/Local.xcconfig        # git-ignored: DEVELOPMENT_TEAM, signing identity (template: Local.xcconfig.example)
 ├─ docs/  SPEC.md  PROMPTS.md  FINDINGS.md  reference/   (screenshots from Ando)
 ├─ App/   ModernMacApp.swift  AppDelegate.swift  Info.plist  ModernMac.entitlements  Assets.xcassets
 ├─ Sources/
@@ -84,6 +87,7 @@ ModernMac/
 │  │             Styles/ TahoeHUDView.swift  NotchHUDView.swift  CircularHUDView.swift
 │  ├─ Settings/  SettingsView.swift  OnboardingView.swift  MenuBarContent.swift
 │  └─ Debug/     SimulateURLHandler.swift  SnapshotRenderer.swift      # DEBUG only
+│                Spike/  Phase 0 experiments (menu items, log to ~/Library/Logs/ModernMac/spike.log)
 └─ Tests/        KeyRouterTests  StepMathTests  HUDCoordinatorTests  MediaKeyParsingTests  Fakes/
 ```
 
@@ -104,6 +108,8 @@ isRepeat  =  (keyFlags & 0x1) == 1
 
 Key codes (from `IOKit/hidsystem/ev_keymap.h`): sound up 0, sound down 1, brightness up 2, brightness down 3, mute 7, illumination up 21, illumination down 22, illumination toggle 23, play 16, next 17, previous 18.
 
+Observed in Phase 0: key state `0x0A` = down, `0x0B` = up (e.g. volume up `data1` = `0x00a00` / `0x00b00`). On the built-in keyboard, brightness keys arrive in this form too; there are no plain key-downs 144/145. The same event mask also delivers other type-14 subtypes (7, 18, 19) that have nothing to do with these keys. Everything that is not subtype 8 must pass through untouched.
+
 Requirements for the tap:
 
 1. The callback does no slow work. It decodes, asks `KeyRouter` for a decision, performs the hardware call (both are sub-millisecond), and returns. macOS disables taps that stall.
@@ -120,7 +126,7 @@ Steps are on a grid, matching the system: normal step = 1/16, fine step = 1/64. 
 
 | Key | Modifiers | Action | Event |
 |---|---|---|---|
-| Volume up / down | none | ±1/16. While muted: assumed that up unmutes and down stays muted — replace with the behaviour observed in V9. | consume |
+| Volume up / down | none | ±1/16. While muted: unmute **and** step, for both up and down (observed in V9). | consume |
 | Volume up / down | ⇧⌥ | ±1/64 | consume |
 | Volume up / down | ⇧ only | ±1/16 and invert the feedback-sound preference for this press | consume |
 | Mute | none or ⇧ | toggle mute | consume |
@@ -140,7 +146,9 @@ Register property listeners for default-device change, level and mute so cached 
 
 Icon selection: muted or level 0 → `speaker.slash.fill`; otherwise `speaker.wave.3.fill` with `variableValue: level`. If the device name contains "AirPods Max" / "AirPods Pro" / "AirPods" use `airpodsmax` / `airpodspro` / `airpods`; other Bluetooth or headphone-port devices use `headphones`.
 
-Feedback sound: play the file from V4 through `NSSound` when (`com.apple.sound.beep.feedback` == 1) XOR (⇧ held), with the timing found in V8.
+Feedback sound: play `/System/Library/LoginPlugins/BezelServices.loginPlugin/Contents/Resources/volume.aiff` (V4) through `NSSound` when (system feedback setting on) XOR (⇧ held). Play it on every volume step, which means each key-down, key repeats included, and never on key-up (V8). If the file is missing, play nothing.
+
+The system setting ("Play feedback when volume is changed") is **not** stored as `com.apple.sound.beep.feedback` in the global domain on macOS 15.7.8. The key was absent while stock macOS played the sound. Phase 1 must find where the setting lives (toggle it in System Settings and diff the preferences) before `followSystem` can work. Until then, treat a missing key as "on".
 
 ### 4.4 Brightness (private API, loaded dynamically)
 
@@ -150,14 +158,16 @@ Load with `dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/D
 int  DisplayServicesGetBrightness(CGDirectDisplayID display, float *brightness);   // 0 = success
 int  DisplayServicesSetBrightness(CGDirectDisplayID display, float brightness);    // 0…1
 bool DisplayServicesCanChangeBrightness(CGDirectDisplayID display);
-void DisplayServicesBrightnessChanged(CGDirectDisplayID display, double brightness); // keeps System Settings in sync
+void DisplayServicesBrightnessChanged(CGDirectDisplayID display, double brightness); // optional; absent on macOS 15.7.8
 ```
 
-All of this lives in `DisplayServicesBridge.swift` and nowhere else. Every symbol is optional: if one is missing, `BrightnessController.isAvailable` is false and brightness keys pass through.
+All of this lives in `DisplayServicesBridge.swift` and nowhere else. Every symbol is optional. If Get, Set or CanChange is missing, `BrightnessController.isAvailable` is false and brightness keys pass through. `DisplayServicesBrightnessChanged` is the exception: it does not exist on macOS 15.7.8, and System Settings' Displays slider follows `SetBrightness` without it (V3), so its absence never disables brightness.
 
-Target display: the display under the mouse pointer if it reports `CanChangeBrightness`; otherwise the built-in display (`CGDisplayIsBuiltin`) if present; otherwise none (pass through). After a successful set, call `DisplayServicesBrightnessChanged` when available.
+Target display: the display under the mouse pointer if it reports `CanChangeBrightness`; otherwise the built-in display (`CGDisplayIsBuiltin`) if present; otherwise none (pass through). After a successful set, call `DisplayServicesBrightnessChanged` only if it resolved.
 
 ### 4.5 Permissions
+
+Accessibility is the only permission needed. In V7 the active tap worked while `CGPreflightListenEventAccess` (Input Monitoring) was false, so onboarding has no Input Monitoring step.
 
 `PermissionManager` exposes `isTrusted` (from `AXIsProcessTrusted()`), `requestTrust()` (`AXIsProcessTrustedWithOptions` with the prompt option) and `openSettings()` (`x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`). While untrusted it polls once per second and starts the tap the moment trust appears — no relaunch.
 
@@ -186,7 +196,7 @@ Target screen: volume HUD → `NSScreen.main`, falling back to the screen under 
 
 ### 5.2 Panel
 
-One reusable `HUDPanel: NSPanel`: style mask `[.borderless, .nonactivatingPanel]`, non-opaque, clear background, `canBecomeKey` and `canBecomeMain` false, `hidesOnDeactivate` false, `isMovable` false, `animationBehavior = .none`, collection behaviour `[.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]`. Level `.statusBar` for `tahoe` and `circular`; the level proven in V6 for `notch`. Content is an `NSHostingView` whose view accepts first mouse.
+One reusable `HUDPanel: NSPanel`: style mask `[.borderless, .nonactivatingPanel]`, non-opaque, clear background, `canBecomeKey` and `canBecomeMain` false, `hidesOnDeactivate` false, `isMovable` false, `animationBehavior = .none`, collection behaviour `[.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]`. Level `.statusBar` for `tahoe` and `circular`; the level proven in V6 for `notch`. Content is an `NSHostingView` whose view accepts first mouse. Override `constrainFrameRect(_:to:)` to return the frame unchanged, otherwise AppKit pushes a panel out of the menu bar strip. `mainMenu + 3` (raw 27) draws over the menu bar beside the notch (V6).
 
 Behavioural requirements (acceptance-tested by hand):
 
@@ -209,7 +219,7 @@ All numbers are in points and are starting values. Final tuning is done against 
 | Shape | Capsule, 280 × 44. With "Show device name" on: continuous rounded rectangle 280 × 64, radius 22, name label (12 pt medium, secondary) above the bar row. |
 | Content | Leading SF Symbol 17 pt semibold, then `LevelBar` filling the rest. Horizontal padding 16, spacing 12. Optional trailing percentage, 12 pt monospaced digits. |
 | Level bar | Capsule track 6 high, primary colour at 20% opacity; fill in primary. No knob. On hover (interactive) the bar grows to 10 high. |
-| Position | Top-right of the target screen: 10 below `visibleFrame.maxY`, 10 from the right edge. Setting allows top-left, top-centre, bottom-centre. |
+| Position | Top-right of the target screen: 10 below `visibleFrame.maxY`, 10 from the right edge. Setting allows top-left, top-centre, bottom-centre. Note: on the notched screen `visibleFrame.maxY` is 37 below the top while the menu bar is 32 high, so the visible gap to the menu bar is 15; tune against the reference screenshots. |
 | Appear | Opacity 0→1, scale 0.9→1 anchored top-trailing, offset y −8→0; spring response 0.35, damping 0.8. |
 | Disappear | Opacity →0, scale →0.95; 0.2 s ease-out. |
 | Level change | Fill animates with a 0.12 s ease-out; the symbol's variable value updates without animation. |
@@ -219,7 +229,7 @@ All numbers are in points and are starting values. Final tuning is done against 
 | Property | Value |
 |---|---|
 | Eligibility | Screens where `NSScreen.safeAreaInsets.top > 0`. |
-| Geometry | `notchHeight = safeAreaInsets.top`; `notchWidth = frame.width − auxiliaryTopLeftArea.width − auxiliaryTopRightArea.width`; horizontally centred, flush with the top of the screen. |
+| Geometry | `notchHeight = safeAreaInsets.top`; `notchWidth = frame.width − auxiliaryTopLeftArea.width − auxiliaryTopRightArea.width`; horizontally centred, flush with the top of the screen. Ando's MacBook Air: 179 × 32 at x 646…825 on a 1470-wide screen. Never use `NSStatusBar.thickness` for this; it reports 22 on the notched screen. |
 | Collapsed | Exactly the notch rectangle, pure black: invisible. The panel is ordered out when collapsed and idle. |
 | Expanded | Same height, widened by a 68-wide wing on each side. Pure black fill, bottom corners radius 10 continuous, top corners square. |
 | Content | Left wing: symbol 14 pt, white. Right wing: mini level bar 44 × 5 (white fill, white 25% track), or percentage text if the setting says so. |
@@ -277,10 +287,10 @@ The Settings window has a live preview: the real style views rendered in `.snaps
 | Command | Does |
 |---|---|
 | `make gen` | `xcodegen generate` |
-| `make build` | gen + `xcodebuild -project ModernMac.xcodeproj -scheme ModernMac -configuration Debug -derivedDataPath .build/xcode build` |
+| `make build` | gen + `xcodebuild -quiet -project ModernMac.xcodeproj -scheme ModernMac -configuration Debug -derivedDataPath .build/xcode -destination 'platform=macOS,arch=$(uname -m)' build` (the destination silences the arm64/x86_64 ambiguity) |
 | `make test` | gen + same with `test` |
 | `make run` | build, kill any running copy, `open` the built app |
-| `make kill` | `pkill -x ModernMac` (ignore "no process") |
+| `make kill` | `pkill -x ModernMac` (ignore "no process"), then wait until the process is gone so `make run` never re-activates the old copy |
 | `make logs` | `log stream --level debug --predicate 'subsystem == "com.ando.ModernMac"'` |
 | `make simulate ARGS="kind=volume&level=0.6"` | `open "modernmac://simulate?$(ARGS)"` |
 | `make snapshots` | build, then run the binary with `--snapshots .build/snapshots` |

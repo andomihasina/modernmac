@@ -1,0 +1,9 @@
+// Signing defaults: ad-hoc, so the project builds on any Mac.
+// Ad-hoc signatures change on every build, which makes macOS forget the
+// Accessibility grant. Put a stable identity in Config/Local.xcconfig
+// (git-ignored; see Local.xcconfig.example).
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM =
+
+#include? "Local.xcconfig"
