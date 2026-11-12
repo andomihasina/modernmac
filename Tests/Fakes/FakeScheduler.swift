@@ -20,12 +20,16 @@ final class FakeScheduler: HUDScheduling {
     private(set) var now: TimeInterval = 0
     private var entries: [Entry] = []
 
+    /// Number of `schedule` calls so far.
+    private(set) var scheduleCount = 0
+
     /// Timers that are scheduled and not cancelled.
     var pendingCount: Int { entries.filter { !$0.isCancelled }.count }
 
     func schedule(
         after delay: TimeInterval, _ action: @escaping @MainActor () -> Void
     ) -> any HUDCancellable {
+        scheduleCount += 1
         let entry = Entry(fireTime: now + delay, action: action)
         entries.append(entry)
         return entry

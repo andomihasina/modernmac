@@ -48,6 +48,19 @@ final class HUDCoordinatorTests: XCTestCase {
         XCTAssertFalse(isVisible)
     }
 
+    func testHideAfterReplacesTheDelayForOneEvent() {
+        coordinator.show(volume(0.5), hideAfter: 5)
+        scheduler.advance(by: 4.9)
+        XCTAssertTrue(isVisible)
+        scheduler.advance(by: 0.1)
+        XCTAssertFalse(isVisible)
+
+        // The next event is back on the normal delay.
+        coordinator.show(volume(0.5))
+        scheduler.advance(by: 1.5)
+        XCTAssertFalse(isVisible)
+    }
+
     func testKeepsTheLastStateAfterHiding() {
         coordinator.show(volume(0.5))
         scheduler.advance(by: 2)

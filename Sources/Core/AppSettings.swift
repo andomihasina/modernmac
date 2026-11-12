@@ -1,8 +1,23 @@
 import Foundation
 import Observation
 
-/// User settings, stored in `UserDefaults`. Only the keys the engine needs
-/// exist so far; the rest of SPEC §6 arrives with the features that use them.
+enum HUDStyle: String, CaseIterable, Sendable {
+    case tahoe
+    case notch
+    case circular
+}
+
+/// The settings a HUD style draws from, as one value.
+struct HUDOptions: Equatable, Sendable {
+    var style = HUDStyle.tahoe
+    var position = HUDPosition.topRight
+    var isInteractive = true
+    var showsPercentage = false
+    var showsDeviceName = false
+}
+
+/// User settings, stored in `UserDefaults`. The keys of SPEC §6 arrive with
+/// the features that use them; the Settings window comes in Phase 5.
 @MainActor
 @Observable
 final class AppSettings {
@@ -21,6 +36,11 @@ final class AppSettings {
         static let handleBrightness = "handleBrightness"
         static let hideDelay = "hideDelay"
         static let playFeedbackSound = "playFeedbackSound"
+        static let style = "style"
+        static let position = "position"
+        static let isInteractive = "isInteractive"
+        static let showPercentage = "showPercentage"
+        static let showDeviceName = "showDeviceName"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -35,6 +55,12 @@ final class AppSettings {
     var playFeedbackSound: FeedbackSoundPolicy {
         didSet { defaults.set(playFeedbackSound.rawValue, forKey: Key.playFeedbackSound) }
     }
+    var style: HUDStyle { didSet { defaults.set(style.rawValue, forKey: Key.style) } }
+    var position: HUDPosition { didSet { defaults.set(position.rawValue, forKey: Key.position) } }
+    /// Whether the HUD reacts to the pointer (hover, drag).
+    var isInteractive: Bool { didSet { defaults.set(isInteractive, forKey: Key.isInteractive) } }
+    var showPercentage: Bool { didSet { defaults.set(showPercentage, forKey: Key.showPercentage) } }
+    var showDeviceName: Bool { didSet { defaults.set(showDeviceName, forKey: Key.showDeviceName) } }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -44,6 +70,21 @@ final class AppSettings {
         hideDelay = defaults.object(forKey: Key.hideDelay) as? Double ?? Self.defaultHideDelay
         playFeedbackSound = defaults.string(forKey: Key.playFeedbackSound)
             .flatMap(FeedbackSoundPolicy.init(rawValue:)) ?? .followSystem
+        style = defaults.string(forKey: Key.style).flatMap(HUDStyle.init(rawValue:)) ?? .tahoe
+        position = defaults.string(forKey: Key.position)
+            .flatMap(HUDPosition.init(rawValue:)) ?? .topRight
+        isInteractive = defaults.object(forKey: Key.isInteractive) as? Bool ?? true
+        showPercentage = defaults.object(forKey: Key.showPercentage) as? Bool ?? false
+        showDeviceName = defaults.object(forKey: Key.showDeviceName) as? Bool ?? false
+    }
+
+    var hudOptions: HUDOptions {
+        HUDOptions(
+            style: style,
+            position: position,
+            isInteractive: isInteractive,
+            showsPercentage: showPercentage,
+            showsDeviceName: showDeviceName)
     }
 
     var routingOptions: RoutingOptions {

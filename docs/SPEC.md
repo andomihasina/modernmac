@@ -80,17 +80,20 @@ ModernMac/
 ├─ Sources/
 │  ├─ Core/      MediaKey.swift  KeyRouter.swift  StepMath.swift  HUDState.swift  AppSettings.swift
 │  │             HardwareControlling.swift (protocols)  KeyEventHandler.swift (route → apply → consume or pass)
+│  │             HUDLayout.swift (panel frame, shape hit test)  LevelMapping.swift (pointer → level)
+│  │             LevelDragHandler.swift (drag → throttled hardware writes)
 │  ├─ Input/     MediaKeyTap.swift  PermissionManager.swift
 │  ├─ Audio/     AudioController.swift  FeedbackSound.swift
 │  ├─ Display/   BrightnessController.swift  DisplayServicesBridge.swift  ScreenGeometry.swift
 │  ├─ HUD/       HUDCoordinator.swift  HUDPanel.swift  HUDRootView.swift
-│  │             PlaceholderHUD.swift (Phase 1 text panel; removed in Phase 2)
+│  │             HUDPresenter.swift (places, fades, pointer tracking)  HUDViewModel.swift
 │  │             Components/ GlassBackground.swift  LevelBar.swift  HUDIcon.swift
 │  │             Styles/ TahoeHUDView.swift  NotchHUDView.swift  CircularHUDView.swift
 │  ├─ Settings/  SettingsView.swift  OnboardingView.swift  MenuBarContent.swift
 │  └─ Debug/     SimulateURLHandler.swift  SnapshotRenderer.swift      # DEBUG only
 └─ Tests/        KeyRouterTests  StepMathTests  HUDCoordinatorTests  MediaKeyParsingTests
-                 KeyEventHandlerTests  HUDStateTests  Fakes/
+                 KeyEventHandlerTests  HUDStateTests  HUDLayoutTests  LevelMappingTests
+                 LevelDragHandlerTests  SimulateRequestTests  Fakes/
 ```
 
 Identifiers: app name `ModernMac`, bundle id `com.ando.ModernMac` (change freely before first release), logging subsystem equal to the bundle id, URL scheme `modernmac` (DEBUG builds only).
@@ -208,6 +211,12 @@ Target screen: volume HUD → `NSScreen.main`, falling back to the screen under 
 
 One reusable `HUDPanel: NSPanel`: style mask `[.borderless, .nonactivatingPanel]`, non-opaque, clear background, `canBecomeKey` and `canBecomeMain` false, `hidesOnDeactivate` false, `isMovable` false, `animationBehavior = .none`, collection behaviour `[.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]`. Level `.statusBar` for `tahoe` and `circular`; the level proven in V6 for `notch`. Content is an `NSHostingView` whose view accepts first mouse. Override `constrainFrameRect(_:to:)` to return the frame unchanged, otherwise AppKit pushes a panel out of the menu bar strip. `mainMenu + 3` (raw 27) draws over the menu bar beside the notch (V6).
 
+The panel is larger than the visible shape: `HUDLayout.canvasPadding` (40) of transparent canvas on every side holds the shadow and gives the appear animation room. Geometry is pure (`HUDLayout`, tested against fake screens): the shape is placed from `visibleFrame`, and on a notched screen whose menu bar is hidden (full screen) it stays below the notch strip (`frame.maxY − safeAreaInsets.top`).
+
+Because of the canvas, the panel ignores mouse events by default. While the HUD is up and "Interactive" is on, `HUDPresenter` checks the pointer position 60 times a second against the shape (rounded-rectangle hit test) and lets mouse events in only while the pointer is on it. The same check drives hover. Polling was chosen over event monitors and tracking areas because the app is never active and the panel is never key; it runs only while the HUD is visible.
+
+The opacity part of every style's appear and disappear is carried by the panel's `alphaValue` (fading the whole window is the reliable way to fade a behind-window blur); scale and offset are SwiftUI animations inside the style view. The panel is ordered out 0.05 s after the fade-out ends.
+
 Behavioural requirements (acceptance-tested by hand):
 
 - Showing the HUD never steals focus, never deactivates the frontmost app, and works over full-screen apps and on every Space.
@@ -216,23 +225,26 @@ Behavioural requirements (acceptance-tested by hand):
 
 ### 5.3 Glass
 
-`GlassBackground` wraps `NSVisualEffectView` (`blendingMode = .behindWindow`, `state = .active`, material `.popover` so it follows light/dark), clipped to the shape with a continuous corner curve. On top: a 1 pt rim stroke with a top-to-bottom gradient (white 35% → white 6%), and a soft shadow (radius 18, y 6, black 18%). It takes a rendering mode from the environment: `.live` uses the visual-effect view; `.snapshot` substitutes a flat translucent tint, because offscreen rendering cannot capture a behind-window blur.
+`GlassBackground` wraps `NSVisualEffectView` (`blendingMode = .behindWindow`, `state = .active`, material `.popover` so it follows light/dark), clipped to the shape with a continuous corner curve. The clip is a `maskImage` drawn from the shape's path (FINDINGS V5, variant A). On top: a sheen (white 10% → 0, top to centre), a 0.5 pt dark edge hairline (black 30% in dark, 10% in light) that keeps the shape readable on a background of similar brightness, inside it a 1 pt rim stroke with a top-to-bottom gradient (white 35% → white 6%), and a soft shadow (radius 18, y 6, black 18%) masked so it only falls outside the shape. Increase Contrast replaces all of this with an opaque fill (white 11% dark, 97% light) and a 1.5 pt rim in the primary colour at 75%. It takes a rendering mode from the environment: `.live` uses the visual-effect view; `.snapshot` substitutes a flat translucent tint (white 13% dark, 96% light, both at 78% opacity), because offscreen rendering cannot capture a behind-window blur.
 
 ### 5.4 Style specifications
 
 All numbers are in points and are starting values. Final tuning is done against the screenshots Ando places in `docs/reference/`; when a screenshot and a number here disagree, the screenshot wins and this table is updated.
+
+`docs/reference/` currently holds `classic`, `ios`, `notch` and `circular` screenshots and **no `tahoe` screenshot**. The `tahoe` numbers below were reviewed in Phase 2 against offscreen snapshots only, with `classic-*.png` (the closest layout: symbol + bar in a dark rounded shape) as a check on symbol and bar proportions.
 
 **`tahoe` — macOS 26 look.** Public descriptions of the real thing: a smaller, oblong, notification-like overlay at the upper-right, just below the menu bar.
 
 | Property | Value |
 |---|---|
 | Shape | Capsule, 280 × 44. With "Show device name" on: continuous rounded rectangle 280 × 64, radius 22, name label (12 pt medium, secondary) above the bar row. |
-| Content | Leading SF Symbol 17 pt semibold, then `LevelBar` filling the rest. Horizontal padding 16, spacing 12. Optional trailing percentage, 12 pt monospaced digits. |
-| Level bar | Capsule track 6 high, primary colour at 20% opacity; fill in primary. No knob. On hover (interactive) the bar grows to 10 high. |
+| Content | Leading SF Symbol 17 pt semibold, monochrome, leading-aligned in a 26-wide box so the bar does not move when the symbol changes; then `LevelBar` filling the rest. Horizontal padding 16, spacing 12. Optional trailing percentage, 12 pt medium monospaced digits, secondary colour, in a 38-wide column (fits "100%"). Device name label sits 5 above the bar row. |
+| Symbol | Only symbols with waves take the variable value; the slashed speaker and the sun are drawn solid (a variable value of 0 dims the whole slashed speaker). A symbol change cross-fades in 0.15 s. |
+| Level bar | Capsule track 6 high, primary colour at 20% opacity; fill in primary with a round leading end. No knob. On hover or drag (interactive) the bar grows to 10 high in 0.15 s. The area that takes the pointer is the bar's full length × 32 high. |
 | Position | Top-right of the target screen: 10 below `visibleFrame.maxY`, 10 from the right edge. Setting allows top-left, top-centre, bottom-centre. Note: on the notched screen `visibleFrame.maxY` is 37 below the top while the menu bar is 32 high, so the visible gap to the menu bar is 15; tune against the reference screenshots. |
-| Appear | Opacity 0→1, scale 0.9→1 anchored top-trailing, offset y −8→0; spring response 0.35, damping 0.8. |
-| Disappear | Opacity →0, scale →0.95; 0.2 s ease-out. |
-| Level change | Fill animates with a 0.12 s ease-out; the symbol's variable value updates without animation. |
+| Appear | Scale 0.9→1 anchored to the corner or edge the HUD sits against (top-trailing for top-right), offset y −8→0 (+8→0 at bottom-centre); spring response 0.35, damping 0.8. Opacity 0→1 as a 0.18 s ease-out fade of the panel. |
+| Disappear | Scale →0.95 and panel opacity →0; 0.2 s ease-out. |
+| Level change | Fill animates with a 0.12 s ease-out; the symbol's variable value updates without animation. No animation on the first frame of an appearance or during a drag. |
 
 **`notch` — integrated with the notch.**
 
@@ -264,6 +276,8 @@ Shared rules: muted shows the slashed speaker and an empty bar or ring; respect 
 ### 5.5 Interactive slider
 
 Dragging maps pointer position to level continuously (no grid snapping), calls the same controller the keys use, throttled to at most one hardware write per 16 ms, and keeps the HUD open until 0.8 s after mouse-up. No feedback sound during a drag; one on release for volume, following the preference.
+
+Details settled in Phase 2 (`LevelDragHandler`, pure and unit-tested): the HUD follows the pointer on every event while writes are throttled; a level held back by the throttle is written by a timer when the 16 ms are up, and on release, so the hardware always ends on the newest level. Pressing on the bar jumps to that level. Dragging while muted unmutes, like the keys. While a drag is on, level changes reported by the hardware are not shown; on release the HUD shows what the hardware settled on. A press without any movement plays no sound. If the pointer is still on the HUD at release, hover keeps it open; the 0.8 s applies when it was released outside.
 
 ## 6. App shell
 
@@ -307,8 +321,8 @@ The Settings window has a live preview: the real style views rendered in `.snaps
 
 Debug-only hooks, compiled out of Release:
 
-- **Simulate URL.** `modernmac://simulate?kind=volume|brightness&level=0…1&muted=0|1&style=tahoe|notch|circular&hold=<seconds>` drives `HUDCoordinator` exactly as a key press would, without touching hardware. This lets the HUD be exercised from the terminal.
-- **Snapshot mode.** `ModernMac --snapshots <dir>` renders every style × kind × level {0, 0.33, 0.66, 1} + muted × {light, dark} to `@2x` PNGs with `ImageRenderer` over a bundled gradient backdrop, then exits 0. Claude Code reads these PNGs to review its own visual work before asking Ando to look.
+- **Simulate URL.** `modernmac://simulate?kind=volume|brightness&level=0…1&muted=0|1&style=tahoe|notch|circular&hold=<seconds>` drives `HUDCoordinator` exactly as a key press would, without touching hardware. This lets the HUD be exercised from the terminal. Until the Settings window exists it also takes `position=topRight|topLeft|topCenter|bottomCenter`, `percent=0|1`, `name=0|1` and `interactive=0|1`; these apply to that one HUD and are not saved. Dragging a simulated HUD's bar does change the real level. The URL scheme is added to the built Info.plist by a Debug-only build script in `project.yml`, so Release builds do not register it.
+- **Snapshot mode.** `ModernMac --snapshots <dir>` renders every style × kind × level {0, 0.33, 0.66, 1} + muted × {light, dark} to `@2x` PNGs with `ImageRenderer` over a gradient backdrop drawn in code, then exits 0. It also renders option variants (percentage, device name, hover, Increase Contrast, one fine step, two on a near-black backdrop for comparison with `docs/reference/`) and one contact sheet per style and appearance (`sheet-<style>-<light|dark>.png`). Claude Code reads these PNGs to review its own visual work before asking Ando to look. Only styles that have their own view are rendered; `notch` and `circular` draw as `tahoe` until Phases 3 and 4.
 
 What only Ando can verify: pressing physical keys, the Accessibility grant, the stock HUD not appearing, how the blur and animation feel. Each phase ends with a short checklist for him.
 

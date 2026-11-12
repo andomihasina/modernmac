@@ -9,6 +9,9 @@ protocol HUDCancellable: AnyObject {
 /// The coordinator's clock. Injected so tests run without waiting.
 @MainActor
 protocol HUDScheduling: AnyObject {
+    /// Seconds on a clock that only moves forward.
+    var now: TimeInterval { get }
+
     func schedule(
         after delay: TimeInterval, _ action: @escaping @MainActor () -> Void
     ) -> any HUDCancellable
@@ -57,9 +60,10 @@ final class HUDCoordinator {
 
     /// A key was handled: show the state and restart the hide timer. A
     /// different kind arriving while visible replaces the content in place.
-    func show(_ state: HUDState, displayID: UInt32? = nil) {
+    /// `hideAfter` replaces the hide delay for this one event (debug `hold`).
+    func show(_ state: HUDState, displayID: UInt32? = nil, hideAfter: TimeInterval? = nil) {
         presentation = HUDPresentation(isVisible: true, state: state, displayID: displayID)
-        restartHideTimer(after: hideDelay())
+        restartHideTimer(after: hideAfter ?? hideDelay())
     }
 
     /// Something else changed the level. Refreshes a visible HUD of the same
@@ -123,6 +127,8 @@ final class MainRunLoopScheduler: HUDScheduling {
         init(timer: Timer) { self.timer = timer }
         func cancel() { timer.invalidate() }
     }
+
+    var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
     func schedule(
         after delay: TimeInterval, _ action: @escaping @MainActor () -> Void

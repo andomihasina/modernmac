@@ -171,3 +171,33 @@ Ando walked the 16-step checklist with the Debug build; every step behaved as ex
 ### Still open
 
 - Volume down while muted at the bottom of the range (1/16 → 0) was not exercised, with stock macOS or ModernMac. ModernMac currently unmutes and lands on 0, which shows the muted icon anyway.
+
+## Phase 2 — HUD panel and `tahoe` (2026-11-12)
+
+Ando ran the 12-step checklist on 2026-11-12 (08:27–08:59); every step behaved as expected: placement top-right under the menu bar, blur, appear/disappear motion, no focus stealing while typing, visible over a full-screen app and on a second Space, hover hold, drag for volume and brightness, clicks just outside the capsule reaching the window below, Reduce Motion (fade only), Increase Contrast (opaque, strong rim), light and dark appearance.
+
+From the trace log of that run:
+
+- 28 shows and 28 hides, every one with the shape at `(1180, 865, 280, 44)`, including in the full-screen app: on this screen `visibleFrame.maxY` (919) is below the notch strip's bottom (924) either way, so the notch-strip rule did not move it.
+- Three drags (volume, brightness twice) ended on continuous, unsnapped levels (`0.8125`, `0.5915…`, `0.6643…`). No hardware write failed.
+- Not covered: a second display (none attached), so "the right screen" rests on the unit tests in `HUDLayoutTests`.
+
+### Reference screenshots
+
+- `docs/reference/` holds eight images: `classic`, `ios`, `notch`, `circular`, each for volume and brightness. **There is no `tahoe` screenshot.** All of them are on a near-black desktop; scale unknown.
+- `classic-*.png` is the closest layout to `tahoe` (symbol, then bar, in a dark rounded shape about 290 × 64 px with a bar 8 px thick). It was used only to check proportions: bar thickness to shape height is 0.125 there and 0.136 in `tahoe` (6 / 44); symbol height to shape height is about 0.4 in both.
+
+### Snapshot rendering (`make snapshots`)
+
+- `ImageRenderer` at scale 2 renders the style views correctly, including SF Symbols with a variable value, `.shadow`, and an even-odd `mask`. An `NSViewRepresentable` does not render offscreen, which is why `GlassBackground` has the `.snapshot` mode.
+- `Image(systemName: "speaker.slash.fill", variableValue: 0)` draws the whole speaker dimmed, in hierarchical and in monochrome rendering. The HUD passes a variable value only to symbols with waves.
+- A 34-pt column is too narrow for "100%" at 12 pt medium with monospaced digits: the text wrapped onto two lines. The column is 38 and the text is single-line.
+
+### Simulate URL
+
+- `make simulate ARGS="kind=volume&level=0.6&style=tahoe&hold=3"` at 08:25:04 showed the HUD with the shape at `(1180, 865, 280, 44)` on the 1470 × 956 screen: 10 from the right edge, 10 below `visibleFrame.maxY` (919). A second simulate (brightness) 1.6 s later replaced the content without a new show.
+- Pointer polling works in the never-active app: `hover=true` at 08:25:05.782 and `hover=false` at 08:25:06.232 while Ando's pointer crossed the capsule; the HUD hid 1.5 s after the hover ended.
+
+### Correction to Phase 1
+
+- The "absent = on" fix for the feedback-sound preference in commit `61ec90b` changed `SystemFeedbackPreference.isEnabled`, but `AppDelegate` still read `storedValue ?? false`, so the fix had no effect. Phase 2 routes both the keys and the drag through `SystemFeedbackPreference.isEnabled`. Nothing changed on this Mac in between, because the key has held an explicit value since 2026-11-12 07:56.

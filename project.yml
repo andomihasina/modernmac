@@ -30,6 +30,25 @@ targets:
         INFOPLIST_FILE: App/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         ENABLE_HARDENED_RUNTIME: YES
+    # The `modernmac://` URL scheme exists in Debug builds only (SPEC §7), so
+    # it is added to the built Info.plist instead of living in App/Info.plist.
+    postBuildScripts:
+      - name: Register debug URL scheme
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
+        script: |
+          if [ "$CONFIGURATION" = "Debug" ]; then
+            PLIST="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+            /usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$PLIST" 2>/dev/null || true
+            /usr/libexec/PlistBuddy \
+              -c "Add :CFBundleURLTypes array" \
+              -c "Add :CFBundleURLTypes:0 dict" \
+              -c "Add :CFBundleURLTypes:0:CFBundleURLName string com.ando.ModernMac.simulate" \
+              -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" \
+              -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string modernmac" \
+              "$PLIST"
+          fi
 
   ModernMacTests:
     type: bundle.unit-test
