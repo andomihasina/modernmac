@@ -1,0 +1,4 @@
+ModernMac.xcodeproj
+.build/
+Config/Local.xcconfig
+.DS_Store

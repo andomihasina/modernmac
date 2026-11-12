@@ -1,0 +1,60 @@
+name: ModernMac
+
+options:
+  bundleIdPrefix: com.ando
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  ModernMac:
+    type: application
+    platform: macOS
+    sources:
+      - App
+      - Sources
+    # Signing lives in Config/Base.xcconfig, which pulls in the git-ignored
+    # Config/Local.xcconfig when it exists.
+    configFiles:
+      Debug: Config/Base.xcconfig
+      Release: Config/Base.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ando.ModernMac
+        INFOPLIST_FILE: App/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_HARDENED_RUNTIME: YES
+
+  ModernMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests
+    dependencies:
+      - target: ModernMac
+    configFiles:
+      Debug: Config/Base.xcconfig
+      Release: Config/Base.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ando.ModernMacTests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  ModernMac:
+    build:
+      targets:
+        ModernMac: all
+        ModernMacTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - ModernMacTests
