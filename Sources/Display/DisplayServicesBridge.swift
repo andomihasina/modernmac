@@ -34,6 +34,13 @@ enum DisplayServicesBridge {
 
     static var isFrameworkLoaded: Bool { handle != nil }
 
+    /// True when brightness can be read, set and checked. The change
+    /// notification is optional and does not count: it is absent on macOS
+    /// 15.7.8, and System Settings stays in sync without it.
+    static var isUsable: Bool {
+        getBrightnessFn != nil && setBrightnessFn != nil && canChangeBrightnessFn != nil
+    }
+
     /// Which symbols resolved on this system, for diagnostics.
     static var symbolReport: [(name: String, isResolved: Bool)] {
         [

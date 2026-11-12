@@ -2,18 +2,11 @@ import SwiftUI
 
 @main
 struct ModernMacApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     var body: some Scene {
         MenuBarExtra("ModernMac", systemImage: "speaker.wave.2") {
-            Text("ModernMac")
-            #if DEBUG
-            Divider()
-            SpikeMenu()
-            #endif
-            Divider()
-            Button("Quit ModernMac") {
-                NSApplication.shared.terminate(nil)
-            }
-            .keyboardShortcut("q")
+            MenuBarContent(settings: appDelegate.settings, permissions: appDelegate.permissions)
         }
     }
 }

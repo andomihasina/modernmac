@@ -86,7 +86,7 @@ With the active tap (`.cgSessionEventTap`, `.headInsertEventTap`, `.defaultTap`,
 - `/System/Library/LoadableBundles/BezelServices.loadbundle/Contents/Resources/volume.aiff` does not exist.
 - The real file, the only `volume.aiff` under `/System/Library`: `/System/Library/LoginPlugins/BezelServices.loginPlugin/Contents/Resources/volume.aiff`. `NSSound` plays it (duration 0.382 s); Ando reported the playback as OK.
 - `com.apple.sound.beep.feedback` is **not set**: not in the global domain (`defaults read -g`, `CFPreferencesCopyValue` with `kCFPreferencesAnyApplication`), not in the current-host global domain, and not in any plist under `~/Library/Preferences` or `ByHost`. This was true both at 18:56:57 and after the V8 test, during which stock macOS played the sound. The only related global keys are `com.apple.sound.beep.flash = 0` and `com.apple.sound.beep.sound = /System/Library/Sounds/Submarine.aiff`.
-- **Open:** where macOS 15 keeps "Play feedback when volume is changed", and what an absent key means. To settle in Phase 1: switch the setting off and on in System Settings, re-read the global domain after each change, and decide from that.
+- **Settled in Phase 1 (2026-11-12):** after Ando switched the setting on in System Settings, `CFPreferencesCopyValue("com.apple.sound.beep.feedback", AnyApplication, CurrentUser, AnyHost)` read `true` on the next keypress (07:56:53); after switching it off it read `false` (08:00:39). No relaunch needed. So the key *is* where the spec said, but macOS writes it only on the first toggle. Before that it was absent while the setting showed on and stock macOS clicked (V8), so **absent = on**.
 
 ### V5 — blur in a panel
 
@@ -138,9 +138,36 @@ Tap off, sound muted, one press. Ando:
 
 The spec assumed down would stay muted. It does not.
 
-## Open items for Phase 1
+## Phase 1 — takeover engine on the real keyboard (2026-11-11 / 12)
 
-1. Hold each key with the tap on and confirm how repeats arrive (V1 repeat bit).
-2. Exercise the modifier rows of the routing table (⇧, ⇧⌥, ⌥, ⌃) and record the flags.
-3. Find where the feedback-sound setting is stored (V4).
-4. Volume down while muted at level 1/16: stock behaviour at the bottom of the range (unmute at 0, or stay muted) was not observed.
+Ando walked the 16-step checklist with the Debug build; every step behaved as expected. Values below are from `~/Library/Logs/ModernMac/trace.log`.
+
+### Key repeat (V1 open item, settled)
+
+- Holding a key sends repeated key-downs with the repeat bit set: `data1 = 0x…a01` (e.g. `0xa01` for volume up), flags unchanged. Seen for volume up/down and brightness up/down (35 repeats in total).
+- Repeat interval about 83 ms (19:29:00.582, .664, .749, .834 …).
+- Each repeat is one step and plays feedback when on, matching V8. Key-up arrives once, at release.
+
+### Modifier flags (raw `CGEventFlags` on the media-key event)
+
+| Held | flags | Decoded | Result |
+|---|---|---|---|
+| none | `0x100` | — | consumed |
+| ⇧ | `0x20102` | ⇧ | volume/mute consumed |
+| ⌥ | `0x80120` | ⌥ | passed through; Sound settings opened |
+| ⇧⌥ | `0xa0122` | ⇧⌥ | consumed, 1/64 steps (e.g. 0.828125 → 0.84375 → 0.859375) |
+| ⌘ | `0x100108` | ⌘ | passed through (not in the table) |
+| ⇧⌘ | `0x12010a` | ⇧⌘ | passed through (not in the table) |
+
+- ⌥ + brightness and ⌃ + brightness produced **no event in the tap at all**: macOS acts on them before the session tap sees a subtype-8 event. They cannot be intercepted, so the router's pass-through for them is moot but harmless. Ando confirmed ⌥ + brightness opened Displays settings.
+
+### Other observations
+
+- Mute and ⇧ + mute toggle; the level is untouched. Volume up and down while muted unmute and step (07:55:27, 07:55:29), as in V9.
+- Hardware returns float noise (0.9375001192…, 0.4999999701…); snapping to the grid keeps the next step exact.
+- Brightness at 1.0 + up: a no-op step (1.0 → 1.0) is still consumed and shown, as intended.
+- With "Enabled" off, all keys passed through and the stock HUD returned. Revoking Accessibility while running, re-granting it, and quitting all behaved as expected (Ando's checklist steps 13–16).
+
+### Still open
+
+- Volume down while muted at the bottom of the range (1/16 → 0) was not exercised, with stock macOS or ModernMac. ModernMac currently unmutes and lands on 0, which shows the muted icon anyway.

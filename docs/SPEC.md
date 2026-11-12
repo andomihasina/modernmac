@@ -76,19 +76,21 @@ ModernMac/
 ├─ Config/Base.xcconfig         # ad-hoc signing defaults; includes Local.xcconfig when present
 ├─ Config/Local.xcconfig        # git-ignored: DEVELOPMENT_TEAM, signing identity (template: Local.xcconfig.example)
 ├─ docs/  SPEC.md  PROMPTS.md  FINDINGS.md  reference/   (screenshots from Ando)
-├─ App/   ModernMacApp.swift  AppDelegate.swift  Info.plist  ModernMac.entitlements  Assets.xcassets
+├─ App/   ModernMacApp.swift  AppDelegate.swift  Log.swift  Info.plist  ModernMac.entitlements  Assets.xcassets
 ├─ Sources/
 │  ├─ Core/      MediaKey.swift  KeyRouter.swift  StepMath.swift  HUDState.swift  AppSettings.swift
+│  │             HardwareControlling.swift (protocols)  KeyEventHandler.swift (route → apply → consume or pass)
 │  ├─ Input/     MediaKeyTap.swift  PermissionManager.swift
 │  ├─ Audio/     AudioController.swift  FeedbackSound.swift
 │  ├─ Display/   BrightnessController.swift  DisplayServicesBridge.swift  ScreenGeometry.swift
 │  ├─ HUD/       HUDCoordinator.swift  HUDPanel.swift  HUDRootView.swift
+│  │             PlaceholderHUD.swift (Phase 1 text panel; removed in Phase 2)
 │  │             Components/ GlassBackground.swift  LevelBar.swift  HUDIcon.swift
 │  │             Styles/ TahoeHUDView.swift  NotchHUDView.swift  CircularHUDView.swift
 │  ├─ Settings/  SettingsView.swift  OnboardingView.swift  MenuBarContent.swift
 │  └─ Debug/     SimulateURLHandler.swift  SnapshotRenderer.swift      # DEBUG only
-│                Spike/  Phase 0 experiments (menu items, log to ~/Library/Logs/ModernMac/spike.log)
-└─ Tests/        KeyRouterTests  StepMathTests  HUDCoordinatorTests  MediaKeyParsingTests  Fakes/
+└─ Tests/        KeyRouterTests  StepMathTests  HUDCoordinatorTests  MediaKeyParsingTests
+                 KeyEventHandlerTests  HUDStateTests  Fakes/
 ```
 
 Identifiers: app name `ModernMac`, bundle id `com.ando.ModernMac` (change freely before first release), logging subsystem equal to the bundle id, URL scheme `modernmac` (DEBUG builds only).
@@ -138,6 +140,10 @@ Steps are on a grid, matching the system: normal step = 1/16, fine step = 1/64. 
 
 Key repeat counts as another step. If the output device has no settable volume, or the target display is not controllable, the key is passed through (fail-open) rather than swallowed.
 
+Only ⇧, ⌥, ⌃ and ⌘ take part in routing; caps lock and fn are ignored. **Every combination not listed above passes through.** That covers volume or mute with ⌃ or ⌘, mute with ⇧⌥, brightness with ⇧ only, and brightness with ⌘ (macOS uses ⌘ + brightness for display mirroring). `KeyRouter` implements exactly this table; `KeyEventHandler` applies the action and consumes the event only if the hardware call succeeded.
+
+In Debug builds every key event and its outcome is appended to `~/Library/Logs/ModernMac/trace.log`.
+
 ### 4.3 Volume (CoreAudio / AudioToolbox, public API)
 
 Default output device: `kAudioHardwarePropertyDefaultOutputDevice` on `kAudioObjectSystemObject`. Level: `kAudioHardwareServiceDeviceProperty_VirtualMainVolume`, output scope, main element, `Float32` 0…1 — this is the same scale the system slider uses. Mute: `kAudioDevicePropertyMute`, output scope. Check `AudioObjectHasProperty` and `AudioObjectIsPropertySettable` before trusting either.
@@ -148,7 +154,9 @@ Icon selection: muted or level 0 → `speaker.slash.fill`; otherwise `speaker.wa
 
 Feedback sound: play `/System/Library/LoginPlugins/BezelServices.loginPlugin/Contents/Resources/volume.aiff` (V4) through `NSSound` when (system feedback setting on) XOR (⇧ held). Play it on every volume step, which means each key-down, key repeats included, and never on key-up (V8). If the file is missing, play nothing.
 
-The system setting ("Play feedback when volume is changed") is **not** stored as `com.apple.sound.beep.feedback` in the global domain on macOS 15.7.8. The key was absent while stock macOS played the sound. Phase 1 must find where the setting lives (toggle it in System Settings and diff the preferences) before `followSystem` can work. Until then, treat a missing key as "on".
+The system setting ("Play feedback when volume is changed") is `com.apple.sound.beep.feedback` in the global domain (read with `CFPreferencesCopyValue`, any application, current user, any host), but macOS writes it only once the setting is first toggled. A missing key means **on**: the setting shows on and stock macOS plays the click (see `docs/FINDINGS.md` V4). Read it per keypress; a change in System Settings applies to the next press without relaunch.
+
+The mute key plays no feedback sound.
 
 ### 4.4 Brightness (private API, loaded dynamically)
 
@@ -191,6 +199,8 @@ struct HUDState: Equatable {
 ```
 
 `HUDCoordinator` phases: `hidden → visible → hidden`, with `visible` held open while the pointer hovers the HUD or a drag is in progress. Each key event restarts the hide timer (default 1.5 s, setting range 0.8–3.0 s). A different `kind` arriving while visible swaps content in place with a cross-fade; it does not hide and re-show. Time is injected (a clock protocol) so tests run instantly.
+
+The coordinator publishes a `HUDPresentation` (visible flag, state, target display) through an `onChange` callback and keeps the last state after hiding so a style can fade out with content. `show` is for key events; `update` is for changes made elsewhere and only refreshes a visible HUD of the same kind, without restarting the timer. Leaving the HUD with the pointer restarts the full hide delay; a drag released outside the HUD hides after 0.8 s (§5.5).
 
 Target screen: volume HUD → `NSScreen.main`, falling back to the screen under the pointer; brightness HUD → the screen of the display being adjusted.
 
