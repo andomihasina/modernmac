@@ -11,6 +11,7 @@ struct MenuBarContent: View {
         Picker("Style", selection: $settings.style) {
             Text("Tahoe").tag(HUDStyle.tahoe)
             Text("Notch").tag(HUDStyle.notch)
+            Text("Circular").tag(HUDStyle.circular)
         }
 
         if !permissions.isTrusted {

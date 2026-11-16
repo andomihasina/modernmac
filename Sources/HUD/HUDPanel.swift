@@ -42,6 +42,13 @@ final class HUDPanel: NSPanel {
 /// Hosts the SwiftUI content. The app is never active, so every click on
 /// the HUD is a "first mouse" and must be accepted to reach the bar.
 final class HUDHostingView<Content: View>: NSHostingView<Content> {
+    /// Scrolling over the HUD. Returns true when the HUD used the event.
+    var onScroll: ((NSEvent) -> Bool)?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
+
+    override func scrollWheel(with event: NSEvent) {
+        if onScroll?(event) != true { super.scrollWheel(with: event) }
+    }
 }

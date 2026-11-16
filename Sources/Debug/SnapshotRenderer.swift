@@ -9,8 +9,7 @@ import SwiftUI
 /// a few option variants, and one contact sheet per appearance.
 @MainActor
 enum SnapshotRenderer {
-    /// Styles that have a view of their own so far.
-    static let styles: [HUDStyle] = [.tahoe, .notch]
+    static let styles: [HUDStyle] = [.tahoe, .notch, .circular]
     static let levels: [Double] = [0, 0.33, 0.66, 1]
     static let scale: CGFloat = 2
 
@@ -83,8 +82,9 @@ enum SnapshotRenderer {
 
     static func variants(style: HUDStyle, scheme: ColorScheme) -> [Variant] {
         switch style {
-        case .tahoe, .circular: return tahoeVariants(style: style, scheme: scheme)
+        case .tahoe: return tahoeVariants(style: style, scheme: scheme)
         case .notch: return notchVariants(scheme: scheme)
+        case .circular: return circularVariants(scheme: scheme)
         }
     }
 
@@ -217,6 +217,66 @@ enum SnapshotRenderer {
         var pillContrast = pill("volume", "066", "contrast", state: volume(0.66), options: options)
         pillContrast.increasesContrast = true
         result.append(pillContrast)
+
+        return result
+    }
+
+    /// `circular`: the ring at its ends and in between, with and without
+    /// the number, and two tiles on a near-black desktop for comparison with
+    /// `docs/reference/circular-*.png` (87 and 40 there).
+    private static func circularVariants(scheme: ColorScheme) -> [Variant] {
+        let schemeName = schemeLabel(scheme)
+        var options = HUDOptions()
+        options.style = .circular
+        var percent = options
+        percent.showsPercentage = true
+
+        func variant(_ parts: String..., state: HUDState, options: HUDOptions) -> Variant {
+            Variant(
+                name: (["circular"] + parts + [schemeName]).joined(separator: "-"),
+                state: state, options: options, colorScheme: scheme)
+        }
+
+        var result: [Variant] = []
+        for level in levels {
+            result.append(variant("volume", levelName(level), state: volume(level), options: options))
+        }
+        result.append(variant("volume", "muted", state: volume(0.66, muted: true), options: options))
+        for level in levels {
+            result.append(
+                variant("brightness", levelName(level), state: brightness(level), options: options))
+        }
+
+        // The smallest steps: one fine step from each end, and the first
+        // level at which the filled arc has room to show.
+        result.append(variant("volume", "fine", state: volume(1.0 / 64), options: options))
+        result.append(variant("volume", "one-step", state: volume(1.0 / 16), options: options))
+        result.append(variant("volume", "two-steps", state: volume(2.0 / 16), options: options))
+        result.append(variant("volume", "almost-full", state: volume(63.0 / 64), options: options))
+
+        result.append(variant("volume", "000", "percent", state: volume(0), options: percent))
+        result.append(variant("volume", "066", "percent", state: volume(0.66), options: percent))
+        result.append(variant("volume", "100", "percent", state: volume(1), options: percent))
+        result.append(
+            variant("volume", "muted", "percent", state: volume(0.66, muted: true), options: percent))
+        result.append(
+            variant("brightness", "033", "percent", state: brightness(0.33), options: percent))
+
+        var hover = variant("volume", "066", "hover", state: volume(0.66), options: options)
+        hover.isHovering = true
+        result.append(hover)
+
+        var contrast = variant("volume", "066", "contrast", state: volume(0.66), options: percent)
+        contrast.increasesContrast = true
+        result.append(contrast)
+
+        var plainVolume = variant("volume", "087", "plain", state: volume(0.87), options: percent)
+        plainVolume.plainBackdrop = true
+        result.append(plainVolume)
+        var plainBrightness = variant(
+            "brightness", "040", "plain", state: brightness(0.40), options: percent)
+        plainBrightness.plainBackdrop = true
+        result.append(plainBrightness)
 
         return result
     }

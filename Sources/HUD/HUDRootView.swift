@@ -17,7 +17,7 @@ struct HUDPlacement: Equatable {
     var panelFrame: CGRect
     /// The visible shape: where the pointer counts as on the HUD.
     var hitFrame: CGRect
-    /// The same while the pointer is on the HUD (a style may grow on hover).
+    /// The same while the pointer is on the HUD (`circular` grows on hover).
     var hoverHitFrame: CGRect
     var hitCornerRadius: CGFloat
     /// Drawn over the menu bar (the level proven in FINDINGS V6).
@@ -26,14 +26,16 @@ struct HUDPlacement: Equatable {
 }
 
 extension HUDStyle {
-    /// `circular` (Phase 4) draws as `tahoe` until its view exists.
     @MainActor
     func placement(options: HUDOptions, screen: ScreenMetrics, reduceMotion: Bool) -> HUDPlacement {
         switch self {
-        case .tahoe, .circular:
+        case .tahoe:
             return TahoeHUDView.placement(options: options, screen: screen)
         case .notch:
             return NotchHUDView.placement(
+                options: options, screen: screen, reduceMotion: reduceMotion)
+        case .circular:
+            return CircularHUDView.placement(
                 options: options, screen: screen, reduceMotion: reduceMotion)
         }
     }
@@ -47,10 +49,12 @@ struct HUDRootView: View {
     var body: some View {
         Group {
             switch model.options.style {
-            case .tahoe, .circular:
+            case .tahoe:
                 TahoeHUDView(model: model)
             case .notch:
                 NotchHUDView(model: model)
+            case .circular:
+                CircularHUDView(model: model)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

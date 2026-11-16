@@ -45,6 +45,11 @@ final class HUDViewModel {
         "\(Int((displayedLevel * 100).rounded()))%"
     }
 
+    /// The level as a bare number, for the `circular` style's ring gap.
+    var levelNumberText: String {
+        "\(Int((displayedLevel * 100).rounded()))"
+    }
+
     /// The label for "Show device name".
     var deviceLabel: String {
         if let name = state.deviceName, !name.isEmpty { return name }

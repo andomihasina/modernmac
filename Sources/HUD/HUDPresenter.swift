@@ -13,6 +13,11 @@ final class HUDPresenter {
 
     /// How often the pointer is checked against the shape while the HUD is up.
     private static let pointerCheckInterval: TimeInterval = 1.0 / 60.0
+    /// A scroll ends when nothing has arrived for this long: a wheel mouse
+    /// never says it has stopped…
+    private static let wheelIdleTimeout: TimeInterval = 0.25
+    /// …and a trackpad gesture's end goes elsewhere if the pointer has left.
+    private static let gestureIdleTimeout: TimeInterval = 0.6
 
     let model: HUDViewModel
     private let panel = HUDPanel()
@@ -23,6 +28,9 @@ final class HUDPresenter {
     private var pointerTimer: Timer?
     /// Bumped on every show and hide; stale delayed work checks it and stops.
     private var generation = 0
+    /// The level a scroll over the disc has reached; nil when none is on.
+    private var scrollLevel: Double?
+    private var scrollEndTimer: Timer?
 
     /// The pointer entered or left the shape.
     var onHoverChanged: ((Bool) -> Void)?
@@ -46,6 +54,7 @@ final class HUDPresenter {
         let hosting = HUDHostingView(rootView: HUDRootView(model: model))
         // The panel's frame is ours to set; the content must not resize it.
         hosting.sizingOptions = []
+        hosting.onScroll = { [weak self] event in self?.scroll(event) ?? false }
         panel.contentView = hosting
 
         model.onDragChanged = { [weak self] level in self?.dragChanged(to: level) }
@@ -130,8 +139,14 @@ final class HUDPresenter {
     }
 
     private func hide() {
+        cancelScroll()
+        // Hidden in the middle of a drag: no mouse-up will come, so let go
+        // of the hardware here.
+        if model.isDragging {
+            model.isDragging = false
+            onDrag?(.ended)
+        }
         stopPointerTracking()
-        model.isDragging = false
         #if DEBUG
         optionsOverride = nil
         ignoresNotch = false
@@ -213,8 +228,8 @@ final class HUDPresenter {
 
     private func checkPointer() {
         guard let placement else { return }
-        // A style may grow while hovered (none does at present); the pointer
-        // then stays "on the HUD" across the larger shape.
+        // `circular` grows while hovered; the pointer then stays "on the
+        // HUD" across the larger shape.
         let frame = model.isHovering ? placement.hoverHitFrame : placement.hitFrame
         let inside = model.isDragging || HUDLayout.shape(
             frame, cornerRadius: placement.hitCornerRadius, contains: NSEvent.mouseLocation)
@@ -246,5 +261,54 @@ final class HUDPresenter {
         checkPointer()
         onDrag?(.ended)
         Log.trace { [model] in "hud drag ended level=\(model.state.level)" }
+    }
+
+    // MARK: - Scroll
+
+    // Scrolling over the disc (`circular`) is a drag without a button: the
+    // first event begins it, and it ends when the gesture does or when the
+    // events stop coming.
+
+    private func scroll(_ event: NSEvent) -> Bool {
+        guard model.options.style == .circular, model.options.isInteractive,
+              model.phase == .shown else { return false }
+        // The glide after the fingers lift must not keep moving the level.
+        guard event.momentumPhase.isEmpty else { return true }
+
+        if event.scrollingDeltaY != 0 {
+            let level = LevelMapping.level(
+                from: scrollLevel ?? model.state.level,
+                scrolledBy: event.scrollingDeltaY,
+                isPrecise: event.hasPreciseScrollingDeltas,
+                isInvertedFromDevice: event.isDirectionInvertedFromDevice)
+            scrollLevel = level
+            dragChanged(to: level)
+        }
+        guard scrollLevel != nil else { return true }
+
+        scrollEndTimer?.invalidate()
+        if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+            endScroll()
+        } else {
+            let timeout = event.phase.isEmpty ? Self.wheelIdleTimeout : Self.gestureIdleTimeout
+            let timer = Timer(timeInterval: timeout, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.endScroll() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            scrollEndTimer = timer
+        }
+        return true
+    }
+
+    private func endScroll() {
+        guard scrollLevel != nil else { return }
+        cancelScroll()
+        dragEnded()
+    }
+
+    private func cancelScroll() {
+        scrollEndTimer?.invalidate()
+        scrollEndTimer = nil
+        scrollLevel = nil
     }
 }

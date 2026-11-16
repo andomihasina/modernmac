@@ -223,3 +223,26 @@ From the trace log of that run:
 ### Ando's check (2026-11-16)
 
 Ando ran the Phase 3 checklist and reported everything tested and working: the shape drops out of the notch at the notch's width with no seam or gap; expansion and collapse read as one shape; menu bar items beside the notch stay clickable; hover holds the HUD open and the bar drags for volume and brightness; the `pill=1` pill appears below the menu bar and drags. The external-display step was conditional on having one to attach; the report did not say whether one was used.
+
+## Phase 4 — `circular` (2026-11-16)
+
+### The reference shows a gauge, not a closed ring
+
+- SPEC §5.4 described a full ring with progress starting at 12 o'clock. `circular-volume.png` and `circular-brightness.png` show something else: an arc open at the bottom, a round knob at the level with a small gap on each side, and the number (no percent sign) in the arc's gap. After Phase 3 ("the screenshot wins") the style was built to the screenshots and the spec table rewritten.
+- Measured from the screenshots (pixels; scale unknown): disc radius about 47.5, ring from radius 31 to 39 (width 8, centre line 35), knob about 9 across, arc ends about 53° either side of 6 o'clock measured at the cap centres, digits about 12.5 high centred about 31 below the disc's centre, symbol about 37 wide. Scaled to the spec's 84-pt disc: ring width 7, outer edge 7.5 inside the disc, knob radius 4, number about 27 below the centre.
+- **One deliberate difference:** in the screenshots the arc is one flat grey on both sides of the knob, so only the knob shows the level. ModernMac fills the arc from the start to the knob in the primary colour and leaves the rest at 18%, which is what the spec's "progress ring" and the Phase 4 brief ask for. `CircularHUDView.progressOpacity` and `trackOpacity` are the two constants; setting them equal gives the screenshots' flat arc.
+- The knob in the two screenshots does not sit on one linear scale (87 at about 93°, 40 at about 349°), and the digits in both are caught mid-roll, so the screenshots were taken during a change. The 260° sweep comes from the arc's ends, not from the knob positions.
+
+### Snapshots
+
+- `ImageRenderer` renders the stroked arcs, the knob and both `scaleEffect`s (hover tile) correctly. `GlassBackground(shape: .capsule)` on a square frame is the disc; nothing new was needed in the glass.
+- At 13 pt medium, "100" fits the gap with room to spare; "100%" would touch the arc's ends, hence the bare number.
+
+### Simulate URL (trace log, 19:56–19:57)
+
+- `style=circular` logged the disc at `(1376, 825, 84, 84)` in a panel at `(1336, 785, 164, 164)`: 10 from the right edge and 10 below `visibleFrame.maxY` (919), the same rule as `tahoe`. `position=bottomCenter` logged `(693, 68, 84, 84)`.
+- Not verifiable from the terminal: drag, scroll (whether the never-key panel receives `scrollWheel` at all), hover scale, and how the ring moves under key repeat. These are on Ando's checklist.
+
+### Ando's check (2026-11-16)
+
+Ando ran the Phase 4 checklist and reported that everything works: the disc appears top-right and scales in and out; the ring keeps up while a key is held; muted reads clearly; hover grows the disc and holds it open; vertical drag and two-finger scroll change the level in the expected direction for volume and brightness (so the never-key panel does receive `scrollWheel`); the number sits in the ring's gap; light and dark both read over a busy wallpaper.

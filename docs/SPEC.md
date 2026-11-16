@@ -10,7 +10,7 @@ ModernMac is a menu bar utility for macOS 14 and 15 that replaces the large, cen
 |---|---|---|
 | `tahoe` | macOS 26 | Small glass capsule in the upper-right, just below the menu bar. Default. |
 | `notch` | Notch | The notch widens; icon in the left wing, level in the right wing. |
-| `circular` | Circular | Glass disc with a progress ring around the icon. |
+| `circular` | Circular | Glass disc with the icon inside a gauge ring. |
 
 Reference product: MediaMate (replacement volume/brightness HUDs, notch integration, macOS 13+). We are building the HUD-replacement part only.
 
@@ -80,9 +80,10 @@ ModernMac/
 ├─ Sources/
 │  ├─ Core/      MediaKey.swift  KeyRouter.swift  StepMath.swift  HUDState.swift  AppSettings.swift
 │  │             HardwareControlling.swift (protocols)  KeyEventHandler.swift (route → apply → consume or pass)
-│  │             HUDLayout.swift (panel frame, shape hit test)  LevelMapping.swift (pointer → level)
+│  │             HUDLayout.swift (panel frame, shape hit test)  LevelMapping.swift (pointer, drag and scroll → level)
 │  │             LevelDragHandler.swift (drag → throttled hardware writes)
 │  │             NotchLayout.swift (notch rectangle, downward expansion, pill fallback)
+│  │             RingGauge.swift (ring angles and trim for `circular`)
 │  ├─ Input/     MediaKeyTap.swift  PermissionManager.swift
 │  ├─ Audio/     AudioController.swift  FeedbackSound.swift
 │  ├─ Display/   BrightnessController.swift  DisplayServicesBridge.swift  ScreenGeometry.swift
@@ -94,7 +95,8 @@ ModernMac/
 │  └─ Debug/     SimulateURLHandler.swift  SnapshotRenderer.swift      # DEBUG only
 └─ Tests/        KeyRouterTests  StepMathTests  HUDCoordinatorTests  MediaKeyParsingTests
                  KeyEventHandlerTests  HUDStateTests  HUDLayoutTests  LevelMappingTests
-                 LevelDragHandlerTests  SimulateRequestTests  NotchLayoutTests  Fakes/
+                 LevelDragHandlerTests  SimulateRequestTests  NotchLayoutTests  RingGaugeTests
+                 DiscMappingTests  Fakes/
 ```
 
 Identifiers: app name `ModernMac`, bundle id `com.ando.ModernMac` (change freely before first release), logging subsystem equal to the bundle id, URL scheme `modernmac` (DEBUG builds only).
@@ -214,7 +216,7 @@ One reusable `HUDPanel: NSPanel`: style mask `[.borderless, .nonactivatingPanel]
 
 The panel is larger than the visible shape: `HUDLayout.canvasPadding` (40) of transparent canvas on every side holds the shadow and gives the appear animation room. Geometry is pure (`HUDLayout`, tested against fake screens): the shape is placed from `visibleFrame`, and on a notched screen whose menu bar is hidden (full screen) it stays below the notch strip (`frame.maxY − safeAreaInsets.top`).
 
-Each style supplies a `HUDPlacement` for a screen: the panel frame, the hit frame (the visible shape), a hit frame used while the pointer is on the HUD (for a style that grows on hover; none does at present), the corner radius for hit testing, whether the panel goes over the menu bar, and how the panel fades. `notch` at a notch hangs its panel from the top edge of the screen at the V6 level and does not fade it; the panel is ordered out once the collapse has settled, so nothing stays over the menu bar, and it ignores the mouse from the moment the collapse starts.
+Each style supplies a `HUDPlacement` for a screen: the panel frame, the hit frame (the visible shape), a hit frame used while the pointer is on the HUD (for a style that grows on hover: `circular`), the corner radius for hit testing, whether the panel goes over the menu bar, and how the panel fades. `notch` at a notch hangs its panel from the top edge of the screen at the V6 level and does not fade it; the panel is ordered out once the collapse has settled, so nothing stays over the menu bar, and it ignores the mouse from the moment the collapse starts.
 
 Because of the canvas, the panel ignores mouse events by default. While the HUD is up and "Interactive" is on, `HUDPresenter` checks the pointer position 60 times a second against the shape (rounded-rectangle hit test) and lets mouse events in only while the pointer is on it. The same check drives hover. Polling was chosen over event monitors and tracking areas because the app is never active and the panel is never key; it runs only while the HUD is visible.
 
@@ -267,19 +269,20 @@ All numbers are in points and are starting values. Final tuning is done against 
 
 | Property | Value |
 |---|---|
-| Shape | Glass disc, diameter 84. |
-| Ring | Inset 9, line width 6, round caps; track primary at 18%; progress in primary, starting at 12 o'clock, clockwise. |
-| Content | Centred symbol 26 pt. Optional percentage under it (10 pt, monospaced digits). |
+| Shape | Glass disc, diameter 84 (`GlassBackground`). |
+| Ring | **An open gauge, not a closed ring** (matches `docs/reference/circular-*.png`): a 260° arc with a 100° gap centred at the bottom, running clockwise from 230° (lower left) to 130° (lower right), measured clockwise from 12 o'clock; half is at 12 o'clock. Line width 7, round caps, outer edge 7.5 inside the disc's edge. A knob (radius 4, primary) marks the level; the arcs stop 2.5 short of it on both sides. From the start to the knob: primary. From the knob to the end: primary at 18%. Below about 7% there is no room for the filled arc and only the knob shows; the same holds for the track near 100%. Pure maths in `RingGauge`, unit-tested. |
+| Content | Centred symbol 22 pt semibold. Optional number in the ring's gap, 27 below the centre: 13 pt medium, monospaced digits, secondary colour, **without a percent sign** ("100%" does not fit the gap). "Show device name" has no effect in this style. |
 | Position | Same rule and setting as `tahoe`. |
-| Appear / disappear | Scale 0.6→1 with opacity, spring response 0.35, damping 0.7; reverse to 0.8 on exit, 0.2 s. |
-| Level change | Ring trim animates 0.15 s ease-out. |
-| Interactive | Vertical drag or scroll over the disc: 1 pt = 0.5%. Hover scales to 1.06. |
+| Appear / disappear | Scale 0.6→1 about the centre, spring response 0.35, damping 0.7; on exit scale →0.8 in 0.2 s ease-out. Opacity is the panel fade, as in `tahoe` (0.18 s in, 0.2 s out). |
+| Level change | The knob and both arcs animate along the ring, 0.15 s ease-out. No animation on the first frame of an appearance or during a drag or scroll. |
+| Interactive | Vertical drag on the disc: 1 pt = 0.5%, up raises. The level is tied to where the drag started. A press without movement does nothing. Scroll over the disc: 1 pt = 0.5% for a trackpad, 8 pt (4%) per line for a wheel; fingers or wheel moving up raise the level whatever "natural scrolling" is set to, so scroll and drag agree. Each scroll event steps from the level reached, so overshoot at an end is forgotten. The glide after the fingers lift is ignored. A scroll counts as a drag (§5.5): it ends when the gesture ends, or 0.25 s after the last wheel event (0.6 s for a gesture whose end never arrives). Dragging or scrolling while muted unmutes and carries on from the level underneath. Hover scales the disc to 1.06 in 0.15 s; the pointer stays on the HUD across the larger disc. Pure mapping in `LevelMapping`, unit-tested. |
+| Reduce Motion | No scale on appear, disappear or hover; the panel fades. |
 
 Shared rules: muted shows the slashed speaker and an empty bar or ring; respect Reduce Motion (cross-fade only, no scale or slide) and Increase Contrast (opaque background, stronger rim); every style renders correctly in light and dark appearance, except `notch`, which is always black with white content.
 
 ### 5.5 Interactive slider
 
-Dragging maps pointer position to level continuously (no grid snapping), calls the same controller the keys use, throttled to at most one hardware write per 16 ms, and keeps the HUD open until 0.8 s after mouse-up. No feedback sound during a drag; one on release for volume, following the preference.
+Dragging (or, on `circular`, scrolling) maps pointer movement to level continuously (no grid snapping), calls the same controller the keys use, throttled to at most one hardware write per 16 ms, and keeps the HUD open until 0.8 s after mouse-up. No feedback sound during a drag; one on release for volume, following the preference.
 
 Details settled in Phase 2 (`LevelDragHandler`, pure and unit-tested): the HUD follows the pointer on every event while writes are throttled; a level held back by the throttle is written by a timer when the 16 ms are up, and on release, so the hardware always ends on the newest level. Pressing on the bar jumps to that level. Dragging while muted unmutes, like the keys. While a drag is on, level changes reported by the hardware are not shown; on release the HUD shows what the hardware settled on. A press without any movement plays no sound. If the pointer is still on the HUD at release, hover keeps it open; the 0.8 s applies when it was released outside.
 
@@ -287,7 +290,7 @@ Details settled in Phase 2 (`LevelDragHandler`, pure and unit-tested): the HUD f
 
 Agent app (`LSUIElement = true`), SwiftUI lifecycle with an `NSApplicationDelegateAdaptor`. Scenes: `MenuBarExtra` (toggleable) and `Settings`. Opening Settings from an agent app needs `NSApp.activate(ignoringOtherApps: true)` alongside `SettingsLink` / `openSettings`, otherwise the window opens behind other apps.
 
-Menu bar menu: enabled toggle, current style picker (in place since Phase 3, listing the styles that exist), "Settings…", permission status line when not trusted, "Quit ModernMac".
+Menu bar menu: enabled toggle, current style picker (in place since Phase 3; all three styles since Phase 4), "Settings…", permission status line when not trusted, "Quit ModernMac".
 
 Onboarding window (shown at launch while untrusted): what the app does, why Accessibility is needed, a button that requests trust and opens the right Settings pane, a live status indicator that flips to granted on its own, then a "try your volume keys" confirmation.
 
@@ -326,7 +329,7 @@ The Settings window has a live preview: the real style views rendered in `.snaps
 Debug-only hooks, compiled out of Release:
 
 - **Simulate URL.** `modernmac://simulate?kind=volume|brightness&level=0…1&muted=0|1&style=tahoe|notch|circular&hold=<seconds>` drives `HUDCoordinator` exactly as a key press would, without touching hardware. This lets the HUD be exercised from the terminal. Until the Settings window exists it also takes `position=topRight|topLeft|topCenter|bottomCenter`, `percent=0|1`, `name=0|1` and `interactive=0|1`; these apply to that one HUD and are not saved. `pill=1` treats the screen as having no notch, which shows the `notch` style's pill on a notched Mac. Dragging a simulated HUD's bar does change the real level. The URL scheme is added to the built Info.plist by a Debug-only build script in `project.yml`, so Release builds do not register it.
-- **Snapshot mode.** `ModernMac --snapshots <dir>` renders every style × kind × level {0, 0.33, 0.66, 1} + muted × {light, dark} to `@2x` PNGs with `ImageRenderer` over a gradient backdrop drawn in code, then exits 0. It also renders option variants (percentage, device name, hover, Increase Contrast, one fine step, two on a near-black backdrop for comparison with `docs/reference/`) and one contact sheet per style and appearance (`sheet-<style>-<light|dark>.png`). Claude Code reads these PNGs to review its own visual work before asking Ando to look. `notch` is rendered on a mock notched screen (the MacBook Air's measured values) and its pill on a mock external display; the backdrop draws the menu bar and the notch in dark grey, so any part of the notch the HUD fails to cover shows, and one variant outlines the notch on top. A collapsed variant must show nothing but the notch. Only styles that have their own view are rendered; `circular` draws as `tahoe` until Phase 4.
+- **Snapshot mode.** `ModernMac --snapshots <dir>` renders every style × kind × level {0, 0.33, 0.66, 1} + muted × {light, dark} to `@2x` PNGs with `ImageRenderer` over a gradient backdrop drawn in code, then exits 0. It also renders option variants (percentage, device name, hover, Increase Contrast, one fine step, two on a near-black backdrop for comparison with `docs/reference/`) and one contact sheet per style and appearance (`sheet-<style>-<light|dark>.png`). Claude Code reads these PNGs to review its own visual work before asking Ando to look. `notch` is rendered on a mock notched screen (the MacBook Air's measured values) and its pill on a mock external display; the backdrop draws the menu bar and the notch in dark grey, so any part of the notch the HUD fails to cover shows, and one variant outlines the notch on top. A collapsed variant must show nothing but the notch. `circular` adds the smallest steps at both ends of the ring and two tiles (87 and 40, with the number) on the near-black backdrop for comparison with `docs/reference/circular-*.png`.
 
 What only Ando can verify: pressing physical keys, the Accessibility grant, the stock HUD not appearing, how the blur and animation feel. Each phase ends with a short checklist for him.
 
@@ -340,7 +343,7 @@ Each phase ends with: `make test` green, a commit, an update to `docs/FINDINGS.m
 | 1 | Engine | `MediaKeyTap`, `KeyRouter`, `StepMath`, `AudioController`, `BrightnessController`, `PermissionManager`, `HUDCoordinator`, fakes and unit tests; a plain placeholder HUD | Every row of the routing table works on the real keyboard; quitting the app restores stock behaviour instantly. |
 | 2 | HUD infrastructure + `tahoe` | `HUDPanel`, `GlassBackground`, `LevelBar`, `HUDIcon`, `TahoeHUDView`, simulate URL, snapshot mode, interactive slider | Looks right against `docs/reference/`; never steals focus; works over a full-screen app. |
 | 3 | `notch` | `ScreenGeometry`, `NotchHUDView`, pill fallback, hover drawer | Wings align with the physical notch to the pixel; correct on an external display. |
-| 4 | `circular` | `CircularHUDView` with drag and scroll | Ring tracks the level smoothly at key-repeat speed. |
+| 4 | `circular` | `CircularHUDView`, `RingGauge`, drag and scroll | Ring tracks the level smoothly at key-repeat speed. |
 | 5 | App shell | Onboarding, Settings with live preview, menu bar menu, launch at login | Fresh-install flow works from zero permissions to working HUD without a relaunch. |
 | 6 | Hardening and release | Sleep/wake, display hot-plug, device switching, permission revoked while running, Reduce Motion, Increase Contrast, README, Release build script | The test matrix in §9 passes. |
 

@@ -160,3 +160,69 @@ final class HUDLayoutTests: XCTestCase {
         XCTAssertFalse(HUDLayout.shape(.zero, cornerRadius: 0, contains: .zero))
     }
 }
+
+@MainActor
+final class CircularPlacementTests: XCTestCase {
+    private let air = ScreenMetrics(
+        frame: CGRect(x: 0, y: 0, width: 1470, height: 956),
+        visibleFrame: CGRect(x: 0, y: 58, width: 1470, height: 861),
+        safeAreaTop: 32,
+        auxiliaryTopLeftWidth: 646,
+        auxiliaryTopRightWidth: 645)
+
+    private func placement(
+        _ position: HUDPosition = .topRight, reduceMotion: Bool = false
+    ) -> HUDPlacement {
+        var options = HUDOptions()
+        options.style = .circular
+        options.position = position
+        return HUDStyle.circular.placement(
+            options: options, screen: air, reduceMotion: reduceMotion)
+    }
+
+    func testDiscSharesTahoesPositionRule() {
+        // 10 from the right edge, 10 below visibleFrame.maxY (919).
+        XCTAssertEqual(placement().hitFrame, CGRect(x: 1376, y: 825, width: 84, height: 84))
+        XCTAssertEqual(
+            placement(.bottomCenter).hitFrame, CGRect(x: 693, y: 68, width: 84, height: 84))
+        XCTAssertFalse(placement().isOverMenuBar)
+    }
+
+    func testPointerCountsOnlyOnTheDiscNotInItsCorners() {
+        let placement = placement()
+        let frame = placement.hitFrame
+        func isOn(_ point: CGPoint) -> Bool {
+            HUDLayout.shape(frame, cornerRadius: placement.hitCornerRadius, contains: point)
+        }
+        XCTAssertTrue(isOn(CGPoint(x: frame.midX, y: frame.midY)))
+        XCTAssertTrue(isOn(CGPoint(x: frame.minX + 1, y: frame.midY)))
+        XCTAssertFalse(isOn(CGPoint(x: frame.minX + 4, y: frame.minY + 4)))
+        XCTAssertFalse(isOn(CGPoint(x: frame.maxX - 4, y: frame.maxY - 4)))
+    }
+
+    func testHoveredDiscIsLargerByTheHoverScale() {
+        let placement = placement()
+        let grown = CircularHUDView.diameter * CircularHUDView.hoverScale
+        XCTAssertEqual(placement.hoverHitFrame.width, grown, accuracy: 1e-9)
+        XCTAssertEqual(placement.hoverHitFrame.midX, placement.hitFrame.midX, accuracy: 1e-9)
+        XCTAssertEqual(placement.hoverHitFrame.midY, placement.hitFrame.midY, accuracy: 1e-9)
+        XCTAssertTrue(placement.panelFrame.contains(placement.hoverHitFrame))
+    }
+
+    func testReduceMotionKeepsTheDiscsSizeOnHover() {
+        let placement = placement(reduceMotion: true)
+        XCTAssertEqual(placement.hoverHitFrame, placement.hitFrame)
+    }
+
+    func testTheKnobAndArcEndsDoNotTouch() {
+        // The clearance covers the knob, the gap and the arc's round cap.
+        let clearance = CircularHUDView.knobClearance
+        let arcLength = clearance * RingGauge.sweep * .pi / 180 * CircularHUDView.ringRadius
+        XCTAssertEqual(
+            arcLength,
+            CircularHUDView.knobRadius + CircularHUDView.knobGap
+                + CircularHUDView.ringLineWidth / 2,
+            accuracy: 1e-9)
+        XCTAssertLessThan(clearance, 0.1)
+    }
+}
