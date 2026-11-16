@@ -121,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if DEBUG
         simulateHandler = SimulateURLHandler { request in
             presenter.optionsOverride = request.options(over: settings.hudOptions)
+            presenter.ignoresNotch = request.forcesPill
             coordinator.show(request.state, hideAfter: request.hold)
         }
         #endif

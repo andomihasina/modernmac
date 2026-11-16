@@ -8,7 +8,18 @@ extension NSScreen {
 
     /// The values the HUD layout works from.
     var metrics: ScreenMetrics {
-        ScreenMetrics(frame: frame, visibleFrame: visibleFrame, safeAreaTop: safeAreaInsets.top)
+        ScreenMetrics(
+            frame: frame,
+            visibleFrame: visibleFrame,
+            safeAreaTop: safeAreaInsets.top,
+            auxiliaryTopLeftWidth: auxiliaryTopLeftArea?.width,
+            auxiliaryTopRightWidth: auxiliaryTopRightArea?.width)
+    }
+
+    /// The physical notch in screen coordinates, computed from the safe
+    /// area and the auxiliary areas; nil on screens without a notch.
+    var notchRect: CGRect? {
+        NotchLayout.notchRect(in: metrics)
     }
 
     static func screen(forDisplayID displayID: UInt32) -> NSScreen? {

@@ -17,6 +17,11 @@ struct ScreenMetrics: Equatable, Sendable {
     var visibleFrame: CGRect
     /// Height of the notch strip, 0 on screens without a notch.
     var safeAreaTop: CGFloat = 0
+    /// Widths of the usable strips left and right of the notch
+    /// (`NSScreen.auxiliaryTopLeftArea` / `auxiliaryTopRightArea`); nil on
+    /// screens without a notch.
+    var auxiliaryTopLeftWidth: CGFloat?
+    var auxiliaryTopRightWidth: CGFloat?
 }
 
 /// Pure geometry for the HUD panel.

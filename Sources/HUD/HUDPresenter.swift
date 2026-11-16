@@ -18,9 +18,8 @@ final class HUDPresenter {
     private let panel = HUDPanel()
     private let options: () -> HUDOptions
 
-    private var geometry: HUDStyleGeometry
-    /// The visible shape in screen coordinates.
-    private var shapeFrame = CGRect.zero
+    /// Where the HUD currently is; nil until it has been placed on a screen.
+    private var placement: HUDPlacement?
     private var pointerTimer: Timer?
     /// Bumped on every show and hide; stale delayed work checks it and stops.
     private var generation = 0
@@ -32,6 +31,8 @@ final class HUDPresenter {
     #if DEBUG
     /// Options for a simulated HUD; dropped when it hides.
     var optionsOverride: HUDOptions?
+    /// Treat the screen as having no notch; dropped when the HUD hides.
+    var ignoresNotch = false
     #endif
 
     /// - Parameter options: Read every time the HUD is shown or updated.
@@ -41,7 +42,6 @@ final class HUDPresenter {
         model = HUDViewModel(
             state: .volume(VolumeReading(level: 0, isMuted: false, deviceName: nil)),
             options: initial)
-        geometry = initial.style.geometry(options: initial)
 
         let hosting = HUDHostingView(rootView: HUDRootView(model: model))
         // The panel's frame is ours to set; the content must not resize it.
@@ -79,13 +79,27 @@ final class HUDPresenter {
     }
 
     private func place(on screen: NSScreen?, options: HUDOptions) {
-        geometry = options.style.geometry(options: options)
         guard let screen else { return }
-        shapeFrame = HUDLayout.shapeFrame(
-            size: geometry.size, position: options.position, screen: screen.metrics)
-        let frame = HUDLayout.panelFrame(forShape: shapeFrame)
-        if panel.frame != frame { panel.setFrame(frame, display: false) }
-        let level: NSWindow.Level = options.style == .notch ? HUDPanel.notchLevel : .statusBar
+        var metrics = screen.metrics
+        #if DEBUG
+        if ignoresNotch {
+            metrics.auxiliaryTopLeftWidth = nil
+            metrics.auxiliaryTopRightWidth = nil
+        }
+        #endif
+        let placement = options.style.placement(
+            options: options,
+            screen: metrics,
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        self.placement = placement
+
+        let notchSize = NotchLayout.notchRect(in: metrics)?.size
+        if model.notchSize != notchSize { model.notchSize = notchSize }
+
+        if panel.frame != placement.panelFrame {
+            panel.setFrame(placement.panelFrame, display: false)
+        }
+        let level: NSWindow.Level = placement.isOverMenuBar ? HUDPanel.notchLevel : .statusBar
         if panel.level != level { panel.level = level }
     }
 
@@ -98,9 +112,11 @@ final class HUDPresenter {
             panel.alphaValue = 0
         }
         panel.orderFrontRegardless()
-        Log.trace { [shapeFrame, model] in
+        Log.trace { [placement, model] in
             "hud show \(model.state.kind) level=\(model.state.level) style=\(model.options.style.rawValue) "
-                + "position=\(model.options.position.rawValue) shape=\(shapeFrame)"
+                + "position=\(model.options.position.rawValue) "
+                + "shape=\(placement?.hitFrame ?? .zero) panel=\(placement?.panelFrame ?? .zero) "
+                + "notch=\(model.notchSize.map { "\($0)" } ?? "none")"
         }
 
         // One run loop turn later, so the content has drawn its starting
@@ -108,7 +124,7 @@ final class HUDPresenter {
         DispatchQueue.main.async { [self] in
             guard token == generation else { return }
             model.phase = .shown
-            fadePanel(to: 1, duration: geometry.motion.appearFade)
+            fadePanel(to: 1, duration: placement?.motion.appearFade ?? 0)
             if model.options.isInteractive { startPointerTracking() }
         }
     }
@@ -118,6 +134,7 @@ final class HUDPresenter {
         model.isDragging = false
         #if DEBUG
         optionsOverride = nil
+        ignoresNotch = false
         #endif
 
         switch model.phase {
@@ -136,16 +153,23 @@ final class HUDPresenter {
         let token = generation
         Log.trace { "hud hide" }
         model.phase = .leaving
-        let duration = geometry.motion.disappearFade
-        fadePanel(to: 0, duration: duration)
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.05) { [self] in
+        let motion = placement?.motion
+            ?? HUDMotion(appearFade: 0, disappearFade: 0, orderOutDelay: 0)
+        // Without a fade the panel stays opaque while the style retracts.
+        if motion.disappearFade > 0 { fadePanel(to: 0, duration: motion.disappearFade) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + motion.orderOutDelay) { [self] in
             guard token == generation else { return }
             panel.orderOut(nil)
+            panel.alphaValue = 0
             setPhaseWithoutAnimation(.idle)
         }
     }
 
     private func fadePanel(to alpha: CGFloat, duration: TimeInterval) {
+        guard duration > 0 else {
+            panel.alphaValue = alpha
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -188,8 +212,12 @@ final class HUDPresenter {
     }
 
     private func checkPointer() {
+        guard let placement else { return }
+        // A style may grow while hovered (none does at present); the pointer
+        // then stays "on the HUD" across the larger shape.
+        let frame = model.isHovering ? placement.hoverHitFrame : placement.hitFrame
         let inside = model.isDragging || HUDLayout.shape(
-            shapeFrame, cornerRadius: geometry.cornerRadius, contains: NSEvent.mouseLocation)
+            frame, cornerRadius: placement.hitCornerRadius, contains: NSEvent.mouseLocation)
         guard inside != model.isHovering else { return }
         model.isHovering = inside
         panel.ignoresMouseEvents = !inside

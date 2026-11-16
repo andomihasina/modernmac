@@ -201,3 +201,25 @@ From the trace log of that run:
 ### Correction to Phase 1
 
 - The "absent = on" fix for the feedback-sound preference in commit `61ec90b` changed `SystemFeedbackPreference.isEnabled`, but `AppDelegate` still read `storedValue ?? false`, so the fix had no effect. Phase 2 routes both the keys and the drag through `SystemFeedbackPreference.isEnabled`. Nothing changed on this Mac in between, because the key has held an explicit value since 2026-11-12 07:56.
+
+## Phase 3 — `notch` (2026-11-12)
+
+### Layout: down, not sideways
+
+- The first build followed SPEC §5.4 and the Phase 3 brief: a 68-wide wing on each side of the notch at menu-bar height, with a hover drawer. Ando, on seeing it: "for the notch style, it needs to expand on bottom, not left and right". That is also what `notch-volume.png` and `notch-brightness.png` show. The wings and the drawer were removed; the spec table now describes the downward shape.
+- Numbers taken from the reference screenshots, assuming the lighter strip beside the black shape is the 37-pt menu bar area (which gives 1.54 px per point and makes the black shape 179 pt wide, exactly this Mac's notch): total height about 66 pt, so 34 below the notch; content row centred about 47 pt from the top; symbol about 24 pt wide; bar about 5 pt thick starting about 45 pt from the left edge and ending about 18 pt from the right; bottom corner radius about 9 pt; outward curve at the top corners about 8 pt.
+
+### Snapshots
+
+- Notch tiles are rendered on a mock screen with the MacBook Air's measured metrics. Pixel check of `notch-volume-066-collapsed-dark.png` (@2x): the collapsed shape is black from x 48 to 405 px in a panel that starts 24 pt left of the notch: exactly the 179-pt notch.
+- The 14-inch and 16-inch layouts in `NotchLayoutTests` are representative numbers, not measurements. The only measured notch is the MacBook Air's.
+
+### Simulate URL and real keys (trace log, 16:16–16:20)
+
+- At the notch, simulated and real key presses both logged the shape at `(646, 890, 179, 66)` in a panel at `(622, 866, 227, 90)` with `notch=(179, 32)`: the notch's own x range, flush with the top of the 956-high screen, 34 below the notch.
+- `style=notch&pill=1` logged the pill at `(577, 879, 316, 32)` with `notch=none`: centred on the 1470-wide screen, 8 below `visibleFrame.maxY` (919).
+- Not covered in that run: a real external display (none attached). The pill on one rests on `NotchLayoutTests` and the `pill=1` override.
+
+### Ando's check (2026-11-16)
+
+Ando ran the Phase 3 checklist and reported everything tested and working: the shape drops out of the notch at the notch's width with no seam or gap; expansion and collapse read as one shape; menu bar items beside the notch stay clickable; hover holds the HUD open and the bar drags for volume and brightness; the `pill=1` pill appears below the menu bar and drags. The external-display step was conditional on having one to attach; the report did not say whether one was used.

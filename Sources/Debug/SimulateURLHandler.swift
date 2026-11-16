@@ -6,7 +6,9 @@ import AppKit
 /// `kind=volume|brightness`, `level=0…1`, `muted=0|1`,
 /// `style=tahoe|notch|circular`, `hold=<seconds>`, plus, until the Settings
 /// window exists, `position=topRight|topLeft|topCenter|bottomCenter`,
-/// `percent=0|1`, `name=0|1` and `interactive=0|1`.
+/// `percent=0|1`, `name=0|1` and `interactive=0|1`. `pill=1` treats the
+/// screen as having no notch, to see the `notch` style's fallback pill on a
+/// notched Mac.
 struct SimulateRequest: Equatable {
     var kind = HUDKind.volume
     var level = 0.5
@@ -17,6 +19,7 @@ struct SimulateRequest: Equatable {
     var showsPercentage: Bool?
     var showsDeviceName: Bool?
     var isInteractive: Bool?
+    var forcesPill = false
 
     /// Nil when the URL is not a simulate URL or a value cannot be read.
     init?(url: URL) {
@@ -57,6 +60,9 @@ struct SimulateRequest: Equatable {
             case "interactive":
                 guard let flag = Self.flag(value) else { return nil }
                 isInteractive = flag
+            case "pill":
+                guard let flag = Self.flag(value) else { return nil }
+                forcesPill = flag
             default:
                 return nil
             }

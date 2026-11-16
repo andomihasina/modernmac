@@ -82,6 +82,7 @@ ModernMac/
 │  │             HardwareControlling.swift (protocols)  KeyEventHandler.swift (route → apply → consume or pass)
 │  │             HUDLayout.swift (panel frame, shape hit test)  LevelMapping.swift (pointer → level)
 │  │             LevelDragHandler.swift (drag → throttled hardware writes)
+│  │             NotchLayout.swift (notch rectangle, downward expansion, pill fallback)
 │  ├─ Input/     MediaKeyTap.swift  PermissionManager.swift
 │  ├─ Audio/     AudioController.swift  FeedbackSound.swift
 │  ├─ Display/   BrightnessController.swift  DisplayServicesBridge.swift  ScreenGeometry.swift
@@ -93,7 +94,7 @@ ModernMac/
 │  └─ Debug/     SimulateURLHandler.swift  SnapshotRenderer.swift      # DEBUG only
 └─ Tests/        KeyRouterTests  StepMathTests  HUDCoordinatorTests  MediaKeyParsingTests
                  KeyEventHandlerTests  HUDStateTests  HUDLayoutTests  LevelMappingTests
-                 LevelDragHandlerTests  SimulateRequestTests  Fakes/
+                 LevelDragHandlerTests  SimulateRequestTests  NotchLayoutTests  Fakes/
 ```
 
 Identifiers: app name `ModernMac`, bundle id `com.ando.ModernMac` (change freely before first release), logging subsystem equal to the bundle id, URL scheme `modernmac` (DEBUG builds only).
@@ -213,6 +214,8 @@ One reusable `HUDPanel: NSPanel`: style mask `[.borderless, .nonactivatingPanel]
 
 The panel is larger than the visible shape: `HUDLayout.canvasPadding` (40) of transparent canvas on every side holds the shadow and gives the appear animation room. Geometry is pure (`HUDLayout`, tested against fake screens): the shape is placed from `visibleFrame`, and on a notched screen whose menu bar is hidden (full screen) it stays below the notch strip (`frame.maxY − safeAreaInsets.top`).
 
+Each style supplies a `HUDPlacement` for a screen: the panel frame, the hit frame (the visible shape), a hit frame used while the pointer is on the HUD (for a style that grows on hover; none does at present), the corner radius for hit testing, whether the panel goes over the menu bar, and how the panel fades. `notch` at a notch hangs its panel from the top edge of the screen at the V6 level and does not fade it; the panel is ordered out once the collapse has settled, so nothing stays over the menu bar, and it ignores the mouse from the moment the collapse starts.
+
 Because of the canvas, the panel ignores mouse events by default. While the HUD is up and "Interactive" is on, `HUDPresenter` checks the pointer position 60 times a second against the shape (rounded-rectangle hit test) and lets mouse events in only while the pointer is on it. The same check drives hover. Polling was chosen over event monitors and tracking areas because the app is never active and the panel is never key; it runs only while the HUD is visible.
 
 The opacity part of every style's appear and disappear is carried by the panel's `alphaValue` (fading the whole window is the reliable way to fade a behind-window blur); scale and offset are SwiftUI animations inside the style view. The panel is ordered out 0.05 s after the fade-out ends.
@@ -250,14 +253,15 @@ All numbers are in points and are starting values. Final tuning is done against 
 
 | Property | Value |
 |---|---|
-| Eligibility | Screens where `NSScreen.safeAreaInsets.top > 0`. |
-| Geometry | `notchHeight = safeAreaInsets.top`; `notchWidth = frame.width − auxiliaryTopLeftArea.width − auxiliaryTopRightArea.width`; horizontally centred, flush with the top of the screen. Ando's MacBook Air: 179 × 32 at x 646…825 on a 1470-wide screen. Never use `NSStatusBar.thickness` for this; it reports 22 on the notched screen. |
+| Eligibility | Screens where `NSScreen.safeAreaInsets.top > 0` **and** both auxiliary top areas exist. Anything else gets the pill. |
+| Geometry | `notchHeight = safeAreaInsets.top`; `notchWidth = frame.width − auxiliaryTopLeftArea.width − auxiliaryTopRightArea.width`; the notch starts at `frame.minX + auxiliaryTopLeftArea.width` (not at the screen's centre: Ando's notch is one point off-centre), flush with the top of the screen. Ando's MacBook Air: 179 × 32 at x 646…825 on a 1470-wide screen. Never use `NSStatusBar.thickness` for this; it reports 22 on the notched screen. Pure code in `NotchLayout`, tested with fake screens. |
 | Collapsed | Exactly the notch rectangle, pure black: invisible. The panel is ordered out when collapsed and idle. |
-| Expanded | Same height, widened by a 68-wide wing on each side. Pure black fill, bottom corners radius 10 continuous, top corners square. |
-| Content | Left wing: symbol 14 pt, white. Right wing: mini level bar 44 × 5 (white fill, white 25% track), or percentage text if the setting says so. |
-| Appear / disappear | Width animates with spring response 0.4, damping 0.75; wing content fades in 0.08 s after the expansion starts and fades out before the collapse. |
-| Interactive | On hover, a 30-high drawer drops below the expanded shape with a full-width `LevelBar` that can be dragged. Build this last in the notch phase. |
-| Screens without a notch | A black floating pill of the same expanded size, centred, 8 below the top of `visibleFrame`, same content and animations (scale + fade instead of width). |
+| Expanded | **Grows downward, not sideways** (Ando, Phase 3; matches `docs/reference/notch-*.png`): the notch's width, extended 34 below the notch, so 179 × 66 on the MacBook Air. Pure black fill, bottom corners radius 10 continuous. Top corners square apart from a 7-radius outward flare where the shape meets the top edge of the screen; the flare grows with the expansion and is 0 when collapsed. The shape never covers the menu bar beside the notch. |
+| Content | One row in the part below the notch, 2 above its centre: symbol 16 pt semibold, white, leading-aligned in a 23-wide box; then a `LevelBar` filling the rest (5 high, white fill, white 35% track); optional trailing percentage (11 pt medium, monospaced digits, 32-wide column). Horizontal padding 16, spacing 8. The content does not move; the growing shape uncovers it. |
+| Appear / disappear | Height animates with spring response 0.4, damping 0.75. Content fades in over 0.14 s starting 0.08 s after the expansion starts; on hide it fades out in 0.08 s and the collapse starts 0.06 s later. The panel does not fade; it is ordered out 0.56 s after the hide starts. |
+| Interactive | The bar is dragged where it is: there is no separate hover drawer, because the dropped part already holds a full-width bar. On hover or drag the bar grows to 8 high; the area that takes the pointer is the bar's length × 28. The hover area is the whole expanded shape. |
+| Screens without a notch | A black floating pill, 316 × 32, centred, 8 below the top of `visibleFrame`. Same row as at the notch (symbol, bar, optional percentage; padding 14, spacing 10), draggable directly. 1 pt white rim at 14% (80% and 1.5 pt with Increase Contrast), soft shadow. Scale 0.9→1 from the top with a panel fade, like `tahoe`. |
+| Reduce Motion | The shape does not change size; the panel fades in and out instead. |
 
 **`circular` — ring.**
 
@@ -283,7 +287,7 @@ Details settled in Phase 2 (`LevelDragHandler`, pure and unit-tested): the HUD f
 
 Agent app (`LSUIElement = true`), SwiftUI lifecycle with an `NSApplicationDelegateAdaptor`. Scenes: `MenuBarExtra` (toggleable) and `Settings`. Opening Settings from an agent app needs `NSApp.activate(ignoringOtherApps: true)` alongside `SettingsLink` / `openSettings`, otherwise the window opens behind other apps.
 
-Menu bar menu: enabled toggle, current style picker, "Settings…", permission status line when not trusted, "Quit ModernMac".
+Menu bar menu: enabled toggle, current style picker (in place since Phase 3, listing the styles that exist), "Settings…", permission status line when not trusted, "Quit ModernMac".
 
 Onboarding window (shown at launch while untrusted): what the app does, why Accessibility is needed, a button that requests trust and opens the right Settings pane, a live status indicator that flips to granted on its own, then a "try your volume keys" confirmation.
 
@@ -321,8 +325,8 @@ The Settings window has a live preview: the real style views rendered in `.snaps
 
 Debug-only hooks, compiled out of Release:
 
-- **Simulate URL.** `modernmac://simulate?kind=volume|brightness&level=0…1&muted=0|1&style=tahoe|notch|circular&hold=<seconds>` drives `HUDCoordinator` exactly as a key press would, without touching hardware. This lets the HUD be exercised from the terminal. Until the Settings window exists it also takes `position=topRight|topLeft|topCenter|bottomCenter`, `percent=0|1`, `name=0|1` and `interactive=0|1`; these apply to that one HUD and are not saved. Dragging a simulated HUD's bar does change the real level. The URL scheme is added to the built Info.plist by a Debug-only build script in `project.yml`, so Release builds do not register it.
-- **Snapshot mode.** `ModernMac --snapshots <dir>` renders every style × kind × level {0, 0.33, 0.66, 1} + muted × {light, dark} to `@2x` PNGs with `ImageRenderer` over a gradient backdrop drawn in code, then exits 0. It also renders option variants (percentage, device name, hover, Increase Contrast, one fine step, two on a near-black backdrop for comparison with `docs/reference/`) and one contact sheet per style and appearance (`sheet-<style>-<light|dark>.png`). Claude Code reads these PNGs to review its own visual work before asking Ando to look. Only styles that have their own view are rendered; `notch` and `circular` draw as `tahoe` until Phases 3 and 4.
+- **Simulate URL.** `modernmac://simulate?kind=volume|brightness&level=0…1&muted=0|1&style=tahoe|notch|circular&hold=<seconds>` drives `HUDCoordinator` exactly as a key press would, without touching hardware. This lets the HUD be exercised from the terminal. Until the Settings window exists it also takes `position=topRight|topLeft|topCenter|bottomCenter`, `percent=0|1`, `name=0|1` and `interactive=0|1`; these apply to that one HUD and are not saved. `pill=1` treats the screen as having no notch, which shows the `notch` style's pill on a notched Mac. Dragging a simulated HUD's bar does change the real level. The URL scheme is added to the built Info.plist by a Debug-only build script in `project.yml`, so Release builds do not register it.
+- **Snapshot mode.** `ModernMac --snapshots <dir>` renders every style × kind × level {0, 0.33, 0.66, 1} + muted × {light, dark} to `@2x` PNGs with `ImageRenderer` over a gradient backdrop drawn in code, then exits 0. It also renders option variants (percentage, device name, hover, Increase Contrast, one fine step, two on a near-black backdrop for comparison with `docs/reference/`) and one contact sheet per style and appearance (`sheet-<style>-<light|dark>.png`). Claude Code reads these PNGs to review its own visual work before asking Ando to look. `notch` is rendered on a mock notched screen (the MacBook Air's measured values) and its pill on a mock external display; the backdrop draws the menu bar and the notch in dark grey, so any part of the notch the HUD fails to cover shows, and one variant outlines the notch on top. A collapsed variant must show nothing but the notch. Only styles that have their own view are rendered; `circular` draws as `tahoe` until Phase 4.
 
 What only Ando can verify: pressing physical keys, the Accessibility grant, the stock HUD not appearing, how the blur and animation feel. Each phase ends with a short checklist for him.
 

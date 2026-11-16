@@ -23,6 +23,9 @@ final class HUDViewModel {
     /// False for the first frame of an appearance and while dragging, so the
     /// bar starts at the right level instead of sliding there.
     var animatesLevel = false
+    /// Size of the physical notch on the screen the HUD is on; nil when
+    /// that screen has none.
+    var notchSize: CGSize?
 
     /// Drag on the level bar: began / moved to a level.
     @ObservationIgnored var onDragChanged: ((Double) -> Void)?

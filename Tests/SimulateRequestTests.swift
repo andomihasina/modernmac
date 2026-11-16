@@ -47,6 +47,12 @@ final class SimulateRequestTests: XCTestCase {
         XCTAssertEqual(options?.style, .tahoe)
     }
 
+    func testPillFlag() {
+        XCTAssertEqual(request("style=notch&pill=1")?.forcesPill, true)
+        XCTAssertEqual(request("style=notch")?.forcesPill, false)
+        XCTAssertNil(request("pill=yes"))
+    }
+
     func testOptionsStayAsTheyAreWithoutOverrides() {
         var base = HUDOptions()
         base.position = .topLeft

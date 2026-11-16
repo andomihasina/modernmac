@@ -39,7 +39,7 @@ struct TahoeHUDView: View {
     static let disappearAnimation = Animation.easeOut(duration: 0.2)
     static let levelAnimation = Animation.easeOut(duration: 0.12)
     /// Fade of the whole panel, which carries the opacity part of appear and disappear.
-    static let motion = HUDMotion(appearFade: 0.18, disappearFade: 0.2)
+    static let motion = HUDMotion(appearFade: 0.18, disappearFade: 0.2, orderOutDelay: 0.25)
 
     // MARK: Geometry for the panel
 
@@ -49,6 +49,18 @@ struct TahoeHUDView: View {
 
     static func shape(options: HUDOptions) -> HUDShape {
         options.showsDeviceName ? .rounded(namedCornerRadius) : .capsule
+    }
+
+    static func placement(options: HUDOptions, screen: ScreenMetrics) -> HUDPlacement {
+        let size = shapeSize(options: options)
+        let frame = HUDLayout.shapeFrame(size: size, position: options.position, screen: screen)
+        return HUDPlacement(
+            panelFrame: HUDLayout.panelFrame(forShape: frame),
+            hitFrame: frame,
+            hoverHitFrame: frame,
+            hitCornerRadius: shape(options: options).cornerRadius(forHeight: size.height),
+            isOverMenuBar: false,
+            motion: motion)
     }
 
     // MARK: View

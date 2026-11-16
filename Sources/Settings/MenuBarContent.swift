@@ -8,6 +8,11 @@ struct MenuBarContent: View {
     var body: some View {
         Toggle("Enabled", isOn: $settings.isEnabled)
 
+        Picker("Style", selection: $settings.style) {
+            Text("Tahoe").tag(HUDStyle.tahoe)
+            Text("Notch").tag(HUDStyle.notch)
+        }
+
         if !permissions.isTrusted {
             Divider()
             Text("Accessibility permission needed")
