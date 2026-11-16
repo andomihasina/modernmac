@@ -16,12 +16,13 @@ struct HUDOptions: Equatable, Sendable {
     var showsDeviceName = false
 }
 
-/// User settings, stored in `UserDefaults`. The keys of SPEC §6 arrive with
-/// the features that use them; the Settings window comes in Phase 5.
+/// User settings, stored in `UserDefaults` under the keys of SPEC §6. Every
+/// change is written at once and read by the engine at its next use, so
+/// nothing needs a relaunch.
 @MainActor
 @Observable
 final class AppSettings {
-    enum FeedbackSoundPolicy: String, Sendable {
+    enum FeedbackSoundPolicy: String, CaseIterable, Sendable {
         case followSystem
         case always
         case never
@@ -41,6 +42,7 @@ final class AppSettings {
         static let isInteractive = "isInteractive"
         static let showPercentage = "showPercentage"
         static let showDeviceName = "showDeviceName"
+        static let showMenuBarIcon = "showMenuBarIcon"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -61,6 +63,11 @@ final class AppSettings {
     var isInteractive: Bool { didSet { defaults.set(isInteractive, forKey: Key.isInteractive) } }
     var showPercentage: Bool { didSet { defaults.set(showPercentage, forKey: Key.showPercentage) } }
     var showDeviceName: Bool { didSet { defaults.set(showDeviceName, forKey: Key.showDeviceName) } }
+    /// The menu bar extra. Dragging the icon off the menu bar turns this off
+    /// too; opening the app again shows Settings, so there is a way back.
+    var showMenuBarIcon: Bool {
+        didSet { defaults.set(showMenuBarIcon, forKey: Key.showMenuBarIcon) }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -76,6 +83,7 @@ final class AppSettings {
         isInteractive = defaults.object(forKey: Key.isInteractive) as? Bool ?? true
         showPercentage = defaults.object(forKey: Key.showPercentage) as? Bool ?? false
         showDeviceName = defaults.object(forKey: Key.showDeviceName) as? Bool ?? false
+        showMenuBarIcon = defaults.object(forKey: Key.showMenuBarIcon) as? Bool ?? true
     }
 
     var hudOptions: HUDOptions {

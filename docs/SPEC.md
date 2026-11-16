@@ -90,13 +90,15 @@ ModernMac/
 │  ├─ HUD/       HUDCoordinator.swift  HUDPanel.swift  HUDRootView.swift
 │  │             HUDPresenter.swift (places, fades, pointer tracking)  HUDViewModel.swift
 │  │             Components/ GlassBackground.swift  LevelBar.swift  HUDIcon.swift
+│  │                         SampleBackdrop.swift (pretend desktop for snapshots and the Settings preview)
 │  │             Styles/ TahoeHUDView.swift  NotchHUDView.swift  CircularHUDView.swift
-│  ├─ Settings/  SettingsView.swift  OnboardingView.swift  MenuBarContent.swift
+│  ├─ Settings/  SettingsView.swift (panes)  HUDPreview.swift  OnboardingView.swift  MenuBarContent.swift
+│  │             AppWindows.swift (Settings and onboarding windows)  LaunchAtLogin.swift (SMAppService)
 │  └─ Debug/     SimulateURLHandler.swift  SnapshotRenderer.swift      # DEBUG only
 └─ Tests/        KeyRouterTests  StepMathTests  HUDCoordinatorTests  MediaKeyParsingTests
                  KeyEventHandlerTests  HUDStateTests  HUDLayoutTests  LevelMappingTests
                  LevelDragHandlerTests  SimulateRequestTests  NotchLayoutTests  RingGaugeTests
-                 DiscMappingTests  Fakes/
+                 DiscMappingTests  AppSettingsTests  Fakes/
 ```
 
 Identifiers: app name `ModernMac`, bundle id `com.ando.ModernMac` (change freely before first release), logging subsystem equal to the bundle id, URL scheme `modernmac` (DEBUG builds only).
@@ -288,11 +290,26 @@ Details settled in Phase 2 (`LevelDragHandler`, pure and unit-tested): the HUD f
 
 ## 6. App shell
 
-Agent app (`LSUIElement = true`), SwiftUI lifecycle with an `NSApplicationDelegateAdaptor`. Scenes: `MenuBarExtra` (toggleable) and `Settings`. Opening Settings from an agent app needs `NSApp.activate(ignoringOtherApps: true)` alongside `SettingsLink` / `openSettings`, otherwise the window opens behind other apps.
+Agent app (`LSUIElement = true`), SwiftUI lifecycle with an `NSApplicationDelegateAdaptor`. The one scene is the `MenuBarExtra`, inserted while `showMenuBarIcon` is on.
 
-Menu bar menu: enabled toggle, current style picker (in place since Phase 3; all three styles since Phase 4), "Settings…", permission status line when not trusted, "Quit ModernMac".
+**Settings and onboarding are AppKit windows with SwiftUI content, owned by the app delegate (`AppWindows`), not SwiftUI scenes.** (Changed in Phase 5; the plan was a `Settings` scene.) A scene can only be opened from inside a SwiftUI view, and with the menu bar icon hidden there is none; these windows must open from the delegate. The Settings window is an `NSTabViewController` in toolbar style, so it looks like any macOS settings window; it takes the selected tab's title, resizes to the tab's content, and follows the content when a hint appears or disappears under a control. Showing either window calls `NSApp.activate(ignoringOtherApps: true)`, `makeKeyAndOrderFront` and `orderFrontRegardless`: an agent app is not active when its window opens, and without this the window opens behind other apps.
 
-Onboarding window (shown at launch while untrusted): what the app does, why Accessibility is needed, a button that requests trust and opens the right Settings pane, a live status indicator that flips to granted on its own, then a "try your volume keys" confirmation.
+**Opening the app again while it is running opens Settings** (`applicationShouldHandleReopen`), whether or not the icon is showing. That is the way back when the icon is hidden, by the toggle or by dragging it off the menu bar (which turns the setting off too). Known limit: a first launch with the icon hidden shows nothing, as it must at login; the user opens the app a second time to reach Settings.
+
+Menu bar menu: enabled toggle, style picker (the three styles under their UI names), a status line and "Set Up Access…" (opens onboarding) while not trusted, "Settings…" (⌘,), "Quit ModernMac" (⌘Q).
+
+Onboarding window (shown at launch while untrusted, and from "Set Up…" in Settings or the menu): what the app does; step 1, why Accessibility is needed, with a button that requests trust (which puts ModernMac in the system's list) and opens the Accessibility pane, and a "Waiting for access…" indicator that turns into "Access granted" on its own; step 2, "Try your volume keys", dimmed until access is granted and ticked once ModernMac has handled a key. The button reads "Close" until both steps are done, then "Done". Closing the window never quits the app.
+
+Settings window, four tabs:
+
+| Tab | Contents |
+|---|---|
+| General | Enable ModernMac; Launch at login (with a hint and a button to Login Items while macOS wants approval, or the error if the change failed); Show icon in menu bar; a Permission section with the Accessibility status and, while missing, "Set Up…". |
+| Appearance | The live preview; Style (segmented: macOS 26, Notch, Circular); Position (disabled for Notch, with a hint); Show percentage; Show device name (disabled except for macOS 26, with a hint). |
+| Behaviour | Hide after (slider 0.8–3.0 s in 0.1 steps, value shown); Interactive; Feedback sound (Follow system setting, Always, Never); a Keys section with "Volume and mute keys" and "Brightness keys". |
+| About | Name, version and build, what the app does, and that it only sees the media keys. A drawn badge stands in for an app icon until there is one. |
+
+Every setting is read by the engine at its next use (per key press, per HUD), so every change applies at once, without a relaunch.
 
 Settings (stored in `UserDefaults`, exposed through one `@Observable AppSettings`):
 
@@ -307,9 +324,9 @@ Settings (stored in `UserDefaults`, exposed through one `@Observable AppSettings
 | `showPercentage` / `showDeviceName` | Bool | false / false |
 | `playFeedbackSound` | `followSystem` \| `always` \| `never` | `followSystem` |
 | `showMenuBarIcon` | Bool | true |
-| launch at login | via `SMAppService.mainApp` status, not stored | off |
+| launch at login | via `SMAppService.mainApp` status, not stored (`LaunchAtLogin`); `.requiresApproval` counts as on, `.notFound` as off | off |
 
-The Settings window has a live preview: the real style views rendered in `.snapshot` mode over a sample backdrop, animating between a few levels.
+The Appearance tab has a live preview (`HUDPreview`): the real style view, rendered in `.snapshot` mode on a pretend screen exactly the size of the preview (440 × 170, with a menu bar, and with a notch when the style is `notch`), stepping through three volume levels and two brightness levels every 1.3 s. Because the pretend screen is the preview, the position setting shows too. It follows every option as it changes and takes no pointer input.
 
 ## 7. Build, run and verification loop
 
@@ -328,8 +345,8 @@ The Settings window has a live preview: the real style views rendered in `.snaps
 
 Debug-only hooks, compiled out of Release:
 
-- **Simulate URL.** `modernmac://simulate?kind=volume|brightness&level=0…1&muted=0|1&style=tahoe|notch|circular&hold=<seconds>` drives `HUDCoordinator` exactly as a key press would, without touching hardware. This lets the HUD be exercised from the terminal. Until the Settings window exists it also takes `position=topRight|topLeft|topCenter|bottomCenter`, `percent=0|1`, `name=0|1` and `interactive=0|1`; these apply to that one HUD and are not saved. `pill=1` treats the screen as having no notch, which shows the `notch` style's pill on a notched Mac. Dragging a simulated HUD's bar does change the real level. The URL scheme is added to the built Info.plist by a Debug-only build script in `project.yml`, so Release builds do not register it.
-- **Snapshot mode.** `ModernMac --snapshots <dir>` renders every style × kind × level {0, 0.33, 0.66, 1} + muted × {light, dark} to `@2x` PNGs with `ImageRenderer` over a gradient backdrop drawn in code, then exits 0. It also renders option variants (percentage, device name, hover, Increase Contrast, one fine step, two on a near-black backdrop for comparison with `docs/reference/`) and one contact sheet per style and appearance (`sheet-<style>-<light|dark>.png`). Claude Code reads these PNGs to review its own visual work before asking Ando to look. `notch` is rendered on a mock notched screen (the MacBook Air's measured values) and its pill on a mock external display; the backdrop draws the menu bar and the notch in dark grey, so any part of the notch the HUD fails to cover shows, and one variant outlines the notch on top. A collapsed variant must show nothing but the notch. `circular` adds the smallest steps at both ends of the ring and two tiles (87 and 40, with the number) on the near-black backdrop for comparison with `docs/reference/circular-*.png`.
+- **Simulate URL.** `modernmac://simulate?kind=volume|brightness&level=0…1&muted=0|1&style=tahoe|notch|circular&hold=<seconds>` drives `HUDCoordinator` exactly as a key press would, without touching hardware. This lets the HUD be exercised from the terminal. It also takes `position=topRight|topLeft|topCenter|bottomCenter`, `percent=0|1`, `name=0|1` and `interactive=0|1`; these apply to that one HUD and are not saved. `pill=1` treats the screen as having no notch, which shows the `notch` style's pill on a notched Mac. Dragging a simulated HUD's bar does change the real level. The URL scheme is added to the built Info.plist by a Debug-only build script in `project.yml`, so Release builds do not register it. Two more debug URLs do what a click in the app's own UI would: `modernmac://show?window=settings|onboarding` opens that window, and `modernmac://set?showMenuBarIcon=0|1` changes that setting in the running app.
+- **Snapshot mode.** `ModernMac --snapshots <dir>` renders every style × kind × level {0, 0.33, 0.66, 1} + muted × {light, dark} to `@2x` PNGs with `ImageRenderer` over a gradient backdrop drawn in code, then exits 0. It also renders option variants (percentage, device name, hover, Increase Contrast, one fine step, two on a near-black backdrop for comparison with `docs/reference/`) and one contact sheet per style and appearance (`sheet-<style>-<light|dark>.png`). Claude Code reads these PNGs to review its own visual work before asking Ando to look. `notch` is rendered on a mock notched screen (the MacBook Air's measured values) and its pill on a mock external display; the backdrop draws the menu bar and the notch in dark grey, so any part of the notch the HUD fails to cover shows, and one variant outlines the notch on top. A collapsed variant must show nothing but the notch. The Settings window (each tab, plus the Appearance tab for the other two styles) and the onboarding window are captured too, light and dark, as `settings-<tab>-<light|dark>.png` and `onboarding-<light|dark>.png`: they are made of AppKit controls, which `ImageRenderer` cannot draw, so the real window is laid out offscreen and captured with `cacheDisplay`, reading settings from a throwaway defaults suite. `circular` adds the smallest steps at both ends of the ring and two tiles (87 and 40, with the number) on the near-black backdrop for comparison with `docs/reference/circular-*.png`.
 
 What only Ando can verify: pressing physical keys, the Accessibility grant, the stock HUD not appearing, how the blur and animation feel. Each phase ends with a short checklist for him.
 

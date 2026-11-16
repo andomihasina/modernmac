@@ -81,5 +81,32 @@ final class SimulateRequestTests: XCTestCase {
         XCTAssertNil(URL(string: "modernmac://other?level=1").flatMap(SimulateRequest.init(url:)))
         XCTAssertNil(URL(string: "https://simulate?level=1").flatMap(SimulateRequest.init(url:)))
     }
+
+    // MARK: - Other debug URLs
+
+    private func command(_ text: String) -> DebugCommand? {
+        URL(string: text).flatMap(DebugCommand.init(url:))
+    }
+
+    func testShowWindowCommands() {
+        XCTAssertEqual(command("modernmac://show?window=settings"), .show(.settings))
+        XCTAssertEqual(command("modernmac://show?window=onboarding"), .show(.onboarding))
+        XCTAssertNil(command("modernmac://show?window=about"))
+        XCTAssertNil(command("modernmac://show"))
+    }
+
+    func testMenuBarIconCommand() {
+        XCTAssertEqual(command("modernmac://set?showMenuBarIcon=0"), .setMenuBarIcon(false))
+        XCTAssertEqual(command("modernmac://set?showMenuBarIcon=1"), .setMenuBarIcon(true))
+        XCTAssertNil(command("modernmac://set?showMenuBarIcon=maybe"))
+        XCTAssertNil(command("modernmac://set?style=notch"))
+    }
+
+    func testCommandsAndSimulateRequestsDoNotOverlap() {
+        XCTAssertNil(command("modernmac://simulate?kind=volume"))
+        XCTAssertNil(request("window=settings"))
+        XCTAssertNil(URL(string: "modernmac://show?window=settings").flatMap(SimulateRequest.init(url:)))
+        XCTAssertNil(command("other://show?window=settings"))
+    }
 }
 #endif

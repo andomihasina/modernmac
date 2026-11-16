@@ -246,3 +246,28 @@ Ando ran the Phase 3 checklist and reported everything tested and working: the s
 ### Ando's check (2026-11-16)
 
 Ando ran the Phase 4 checklist and reported that everything works: the disc appears top-right and scales in and out; the ring keeps up while a key is held; muted reads clearly; hover grows the disc and holds it open; vertical drag and two-finger scroll change the level in the expected direction for volume and brightness (so the never-key panel does receive `scrollWheel`); the number sits in the ring's gap; light and dark both read over a busy wallpaper.
+
+## Phase 5 — app shell (2026-11-16)
+
+### Windows from an agent app
+
+- A SwiftUI `Settings` scene cannot be opened from the app delegate, and with the menu bar icon hidden no SwiftUI view exists to open it from. Settings and onboarding are therefore AppKit windows (`AppWindows`) with SwiftUI content. SPEC §6 is updated.
+- Opening the app while it is running (`open ModernMac.app`) reaches `applicationShouldHandleReopen` through the SwiftUI delegate adaptor. Checked from the terminal with the window list (`CGWindowListCopyWindowInfo`): with the icon hidden, a second `open` put a 480 × 369 window on screen and `lsappinfo front` reported ModernMac as the frontmost app.
+- `open "modernmac://simulate?…"` does **not** count as a reopen: no Settings window appeared after a simulate URL.
+- `MenuBarExtra(isInserted:)` bound to the `@Observable` settings follows a change made elsewhere in the running app: after `modernmac://set?showMenuBarIcon=0` the 35 × 36 status-item window was gone from the window list, and after `=1` it was back. SwiftUI also keeps a key of its own, `NSStatusItem Visible Item-0`, in the app's defaults.
+
+### Looking at the windows
+
+- `screencapture -l<window id>` fails here ("could not create image from window"): the terminal has no Screen Recording permission. The windows are captured in-process instead, by `make snapshots`.
+- `ImageRenderer` cannot draw `Toggle`, `Picker`, `Slider` or a grouped `Form`. Laying the real window out offscreen and calling `cacheDisplay(in:to:)` on its frame view captures everything, toolbar tabs included.
+- In those captures the preview's glass shows thin stray lines along the bounding box of the shape (clearest around the `circular` disc). The `ImageRenderer` tiles of the same views have none, and neither did the real HUD in Phases 2–4, so this is taken to be an artefact of `cacheDisplay` and the shadow's mask. It is on Ando's checklist to confirm on screen.
+- A grouped `Form` with `.scrollDisabled(true)` and `.fixedSize(horizontal: false, vertical: true)` reports its content height, which is what lets the window fit each tab. With `sizingOptions = [.preferredContentSize]` on the hosting controllers, the tab controller's `preferredContentSizeDidChange(for:)` fires when a hint appears under a control (Appearance tab: 472 pt high for `tahoe`, 503 for `notch`, 487 for `circular`, title bar and toolbar included).
+
+### Not exercised from the terminal
+
+- `SMAppService.mainApp.register()` was not called during development, to leave Ando's login items alone; only the status was read (not registered). Registration, the approval state and surviving a logout are on the checklist. A Debug build registers the copy under `.build/xcode/…`, so it only launches at login while that build stays where it is.
+- The Accessibility flow from zero (onboarding at first launch, the status turning without a relaunch) needs `tccutil reset`, which only Ando runs.
+
+### Ando's check (2026-11-16)
+
+Ando ran the Phase 5 checklist from a clean slate (`tccutil reset`, defaults deleted) and reported that everything works: onboarding at first launch, the status turning to granted without a relaunch, the "try your keys" step, Settings coming to the front, each setting taking effect at once (including the per-key toggles and "Enable"), launch at login surviving a logout, and hiding the menu bar icon then reopening the app opening Settings. Since everything passed, the stray lines seen around the preview's HUD in the offscreen captures did not show on screen: they were a capture artefact.

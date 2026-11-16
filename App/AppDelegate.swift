@@ -5,6 +5,11 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let settings = AppSettings()
     let permissions = PermissionManager()
+    let launchAtLogin = LaunchAtLogin()
+    let onboardingProgress = OnboardingProgress()
+    private lazy var windows = AppWindows(
+        settings: settings, permissions: permissions,
+        launchAtLogin: launchAtLogin, onboardingProgress: onboardingProgress)
 
     private var audio: AudioController?
     private var coordinator: HUDCoordinator?
@@ -32,9 +37,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startEngine()
     }
 
+    /// The app was opened while it was already running. That is the way
+    /// back to Settings when the menu bar icon is hidden (SPEC §6).
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication, hasVisibleWindows: Bool
+    ) -> Bool {
+        guard !isRunningTests else { return false }
+        Log.app.notice("Reopened while running")
+        showSettings()
+        return false
+    }
+
+    func showSettings() {
+        windows.showSettings()
+    }
+
+    func showOnboarding() {
+        windows.showOnboarding()
+    }
+
     private func startEngine() {
         let settings = settings
         let permissions = permissions
+        let onboardingProgress = onboardingProgress
 
         let symbols = DisplayServicesBridge.symbolReport
             .map { "\($0.name)=\($0.isResolved)" }
@@ -96,7 +121,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             options: { settings.routingOptions },
             isFeedbackEnabled: isFeedbackEnabled,
             present: { state, displayID in
-                DispatchQueue.main.async { coordinator.show(state, displayID: displayID) }
+                DispatchQueue.main.async {
+                    coordinator.show(state, displayID: displayID)
+                    onboardingProgress.keyHandled()
+                }
             })
         keyHandler.trace = { Log.trace($0) }
 
@@ -119,19 +147,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.tap = tap
 
         #if DEBUG
-        simulateHandler = SimulateURLHandler { request in
-            presenter.optionsOverride = request.options(over: settings.hudOptions)
-            presenter.ignoresNotch = request.forcesPill
-            coordinator.show(request.state, hideAfter: request.hold)
-        }
+        simulateHandler = SimulateURLHandler(
+            onRequest: { request in
+                presenter.optionsOverride = request.options(over: settings.hudOptions)
+                presenter.ignoresNotch = request.forcesPill
+                coordinator.show(request.state, hideAfter: request.hold)
+            },
+            onCommand: { [weak self] command in
+                switch command {
+                case .show(.settings): self?.showSettings()
+                case .show(.onboarding): self?.showOnboarding()
+                case .setMenuBarIcon(let isShown): settings.showMenuBarIcon = isShown
+                }
+            })
         #endif
 
         if permissions.isTrusted {
             if tap.start() { Log.app.notice("Takeover active") }
         } else {
-            // No onboarding window yet (Phase 5): ask straight away.
-            Log.app.notice("Not trusted for Accessibility; requesting")
-            permissions.requestTrust()
+            Log.app.notice("Not trusted for Accessibility; showing onboarding")
+            showOnboarding()
         }
         permissions.startMonitoring()
     }

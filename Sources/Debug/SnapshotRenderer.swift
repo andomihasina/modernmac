@@ -70,6 +70,7 @@ enum SnapshotRenderer {
                     count += 1
                 }
             }
+            count += try writeWindowSnapshots(to: outputDirectory)
             print("Wrote \(count) snapshots to \(outputDirectory.path)")
             return 0
         } catch {
@@ -345,6 +346,95 @@ enum SnapshotRenderer {
         .background(Color(white: 0.08))
     }
 
+    // MARK: - Settings and onboarding
+
+    /// The Settings panes and the onboarding window, light and dark. These
+    /// are made of AppKit controls, which `ImageRenderer` cannot draw, so
+    /// each is laid out in an offscreen window and captured from its view.
+    /// Settings are read from a throwaway defaults suite: the pictures show
+    /// the defaults, and nothing of the user's is touched.
+    private static func writeWindowSnapshots(to directory: URL) throws -> Int {
+        let suiteName = "com.ando.ModernMac.snapshots"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let permissions = PermissionManager()
+        let progress = OnboardingProgress()
+        let settings = AppSettings(defaults: defaults)
+        let windows = AppWindows(
+            settings: settings, permissions: permissions,
+            launchAtLogin: LaunchAtLogin(), onboardingProgress: progress)
+
+        var count = 0
+        for (label, appearanceName) in [
+            ("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua),
+        ] {
+            let appearance = NSAppearance(named: appearanceName)
+            // The real window: toolbar tabs, resized to each pane in turn.
+            let settingsWindow = windows.makeSettingsWindow()
+            settingsWindow.appearance = appearance
+            if let tabs = settingsWindow.contentViewController as? SettingsTabController {
+                for (index, pane) in SettingsPane.allCases.enumerated() {
+                    tabs.selectedTabViewItemIndex = index
+                    tabs.fitWindowToSelectedTab(animated: false)
+                    try capture(
+                        settingsWindow, named: "settings-\(pane.rawValue)-\(label)", to: directory)
+                    count += 1
+                    guard pane == .appearance else { continue }
+                    // The preview for the other styles; the window has to
+                    // follow the hints that appear under the controls.
+                    for style in [HUDStyle.notch, .circular] {
+                        settings.style = style
+                        settings.showPercentage = true
+                        try capture(
+                            settingsWindow,
+                            named: "settings-appearance-\(style.rawValue)-\(label)", to: directory)
+                        count += 1
+                    }
+                    settings.style = .tahoe
+                    settings.showPercentage = false
+                }
+            }
+            try capture(
+                windows.onboardingView(), appearance: appearance,
+                named: "onboarding-\(label)", to: directory)
+            count += 1
+        }
+        return count
+    }
+
+    private static func capture(
+        _ view: some View, appearance: NSAppearance?, named name: String, to directory: URL
+    ) throws {
+        let hosting = NSHostingView(rootView: view)
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: hosting.fittingSize),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.appearance = appearance
+        window.contentView = hosting
+        window.setContentSize(hosting.fittingSize)
+        try capture(window, named: name, to: directory)
+    }
+
+    /// The whole window, title bar and toolbar included, without showing it.
+    private static func capture(_ window: NSWindow, named name: String, to directory: URL) throws {
+        guard let frame = window.contentView?.superview else { throw RenderError.noImage(name) }
+        frame.layoutSubtreeIfNeeded()
+        // A turn of the run loop lets SwiftUI finish its first update.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+        frame.layoutSubtreeIfNeeded()
+
+        guard let bitmap = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else {
+            throw RenderError.noImage(name)
+        }
+        frame.cacheDisplay(in: frame.bounds, to: bitmap)
+        guard let data = bitmap.representation(using: .png, properties: [:]) else {
+            throw RenderError.noImage(name)
+        }
+        try data.write(to: directory.appendingPathComponent("\(name).png"))
+    }
+
     // MARK: - Output
 
     private enum RenderError: Error {
@@ -359,119 +449,6 @@ enum SnapshotRenderer {
                 .representation(using: .png, properties: [:])
         else { throw RenderError.noImage(name) }
         try data.write(to: directory.appendingPathComponent("\(name).png"))
-    }
-}
-
-/// A stand-in desktop: a wallpaper-like gradient, or a near-black one.
-struct SnapshotBackdrop: View {
-    var colorScheme: ColorScheme
-    var isPlain = false
-
-    var body: some View {
-        if isPlain {
-            Color(red: 0.05, green: 0.06, blue: 0.08)
-        } else {
-            ZStack {
-                LinearGradient(colors: base, startPoint: .topLeading, endPoint: .bottomTrailing)
-                RadialGradient(
-                    colors: [accent.opacity(0.9), accent.opacity(0)],
-                    center: UnitPoint(x: 0.78, y: 0.2), startRadius: 0, endRadius: 170)
-                RadialGradient(
-                    colors: [glow.opacity(0.8), glow.opacity(0)],
-                    center: UnitPoint(x: 0.15, y: 0.95), startRadius: 0, endRadius: 150)
-            }
-        }
-    }
-
-    private var base: [Color] {
-        colorScheme == .dark
-            ? [Color(red: 0.10, green: 0.12, blue: 0.32), Color(red: 0.32, green: 0.12, blue: 0.40),
-               Color(red: 0.05, green: 0.25, blue: 0.33)]
-            : [Color(red: 0.45, green: 0.70, blue: 0.96), Color(red: 0.80, green: 0.74, blue: 0.95),
-               Color(red: 0.99, green: 0.80, blue: 0.66)]
-    }
-
-    private var accent: Color {
-        colorScheme == .dark
-            ? Color(red: 0.95, green: 0.40, blue: 0.55) : Color(red: 1.0, green: 0.93, blue: 0.70)
-    }
-
-    private var glow: Color {
-        colorScheme == .dark
-            ? Color(red: 0.15, green: 0.60, blue: 0.85) : Color(red: 0.35, green: 0.55, blue: 0.95)
-    }
-}
-/// The top of a pretend screen behind a HUD panel: wallpaper, menu bar
-/// and, on a notched screen, the notch itself. The mock notch is drawn in
-/// dark grey, not black, so any part of it the HUD fails to cover shows.
-struct MockScreenBackdrop: View {
-    static let notchColor = Color(white: 0.22)
-    static let notchCornerRadius: CGFloat = 8
-
-    var colorScheme: ColorScheme
-    var screen: ScreenMetrics
-    /// The panel in screen coordinates; the view is exactly this big.
-    var panelFrame: CGRect
-
-    /// Menu bar height: the notch strip on a notched screen.
-    static func menuBarHeight(of screen: ScreenMetrics) -> CGFloat {
-        screen.safeAreaTop > 0 ? screen.safeAreaTop : screen.frame.maxY - screen.visibleFrame.maxY
-    }
-
-    /// A rectangle in screen coordinates → the view's top-left coordinates.
-    static func local(_ rect: CGRect, in panelFrame: CGRect) -> CGRect {
-        CGRect(
-            x: rect.minX - panelFrame.minX, y: panelFrame.maxY - rect.maxY,
-            width: rect.width, height: rect.height)
-    }
-
-    var body: some View {
-        let barHeight = Self.menuBarHeight(of: screen)
-        let screenTop = panelFrame.maxY - screen.frame.maxY  // > 0: panel reaches above the screen
-        let isDark = colorScheme == .dark
-
-        ZStack(alignment: .topLeading) {
-            SnapshotBackdrop(colorScheme: colorScheme)
-
-            // Above the top edge of the screen there is only bezel.
-            Color.black.frame(height: max(0, screenTop))
-
-            // Menu bar with a few stand-in items.
-            ZStack {
-                (isDark ? Color.black.opacity(0.45) : Color.white.opacity(0.55))
-                HStack(spacing: 14) {
-                    Image(systemName: "apple.logo")
-                    Text("Finder").fontWeight(.semibold)
-                    Text("File")
-                    Text("Edit")
-                    Text("View")
-                    Spacer()
-                    Image(systemName: "wifi")
-                    Image(systemName: "battery.75percent")
-                    Text("9:41")
-                }
-                .font(.system(size: 13))
-                .lineLimit(1)
-                .fixedSize()
-                .frame(width: panelFrame.width - 24)
-                .clipped()
-                .foregroundStyle(isDark ? Color.white : Color.black)
-                .padding(.horizontal, 12)
-            }
-            .frame(height: barHeight)
-            .offset(y: max(0, screenTop))
-
-            if let notch = NotchLayout.notchRect(in: screen) {
-                let rect = Self.local(notch, in: panelFrame)
-                UnevenRoundedRectangle(
-                    bottomLeadingRadius: Self.notchCornerRadius,
-                    bottomTrailingRadius: Self.notchCornerRadius)
-                    .fill(Self.notchColor)
-                    .frame(width: rect.width, height: rect.height)
-                    .offset(x: rect.minX, y: rect.minY)
-            }
-        }
-        .frame(width: panelFrame.width, height: panelFrame.height, alignment: .topLeading)
     }
 }
 
